@@ -51,17 +51,20 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 	async sendResponse(bridge: TmuxBridge, paneTarget: string, response: string): Promise<void> {
 		logger.info("claude-code", `Sending response: ${response}`);
 
-		// Detect what kind of prompt we're responding to
-		const capture = await bridge.capturePane(paneTarget, { startLine: -5 });
-		const lastLines = capture.content;
-
-		if (/\(y\/n\)/i.test(lastLines) || /Allow/i.test(lastLines) || /approve/i.test(lastLines)) {
-			// Yes/no prompt — send 'y'
-			await bridge.sendKeys(paneTarget, "y", { literal: true });
-			await sleep(200);
+		// Priority 1: "Enter" — just press Enter (confirm current selection)
+		if (response === "Enter") {
 			await bridge.sendEnter(paneTarget);
-		} else if (response.startsWith("arrow:")) {
-			// Arrow key selection: "arrow:down:2" means press Down 2 times then Enter
+			return;
+		}
+
+		// Priority 2: "Escape" — just press Escape
+		if (response === "Escape") {
+			await bridge.sendEscape(paneTarget);
+			return;
+		}
+
+		// Priority 3: "arrow:down:2" — arrow key selection then Enter
+		if (response.startsWith("arrow:")) {
 			const parts = response.split(":");
 			const direction = parts[1] === "up" ? "Up" : "Down";
 			const times = parseInt(parts[2] || "1", 10);
@@ -71,12 +74,35 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 			}
 			await sleep(200);
 			await bridge.sendEnter(paneTarget);
-		} else {
-			// General input — send the response text, wait 0.2s, then Enter
-			await bridge.sendText(paneTarget, response);
+			return;
+		}
+
+		// Priority 4: "keys:Down,Down,Enter" — generic key sequence
+		if (response.startsWith("keys:")) {
+			const keyNames = response.slice(5).split(",");
+			for (const key of keyNames) {
+				const trimmed = key.trim();
+				if (!trimmed) continue;
+				await sendNamedKey(bridge, paneTarget, trimmed);
+				await sleep(100);
+			}
+			return;
+		}
+
+		// Priority 5: Detect (y/n) context — send 'y' + Enter
+		const capture = await bridge.capturePane(paneTarget, { startLine: -5 });
+		const lastLines = capture.content;
+		if (/\(y\/n\)/i.test(lastLines) || /Allow/i.test(lastLines) || /approve/i.test(lastLines)) {
+			await bridge.sendKeys(paneTarget, "y", { literal: true });
 			await sleep(200);
 			await bridge.sendEnter(paneTarget);
+			return;
 		}
+
+		// Priority 6: General text input — sendText + Enter
+		await bridge.sendText(paneTarget, response);
+		await sleep(200);
+		await bridge.sendEnter(paneTarget);
 	}
 
 	async shutdown(bridge: TmuxBridge, paneTarget: string): Promise<void> {
@@ -128,4 +154,27 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Map a named key to tmux send-keys argument */
+const NAMED_KEYS: Record<string, string> = {
+	Enter: "Enter",
+	Escape: "Escape",
+	Up: "Up",
+	Down: "Down",
+	Left: "Left",
+	Right: "Right",
+	Tab: "Tab",
+	Space: "Space",
+	Backspace: "BSpace",
+};
+
+async function sendNamedKey(bridge: TmuxBridge, paneTarget: string, key: string): Promise<void> {
+	const mapped = NAMED_KEYS[key];
+	if (mapped) {
+		await bridge.sendKeys(paneTarget, mapped);
+	} else {
+		// Single character — send as literal
+		await bridge.sendKeys(paneTarget, key, { literal: true });
+	}
 }
