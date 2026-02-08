@@ -15,6 +15,7 @@ import { PromptLoader } from "./llm/prompt-loader.js";
 import { getAllProviders } from "./llm/providers/registry.js";
 import { TmuxBridge } from "./tmux/bridge.js";
 import { StateDetector } from "./tmux/state-detector.js";
+import { runDoctor } from "./doctor/run.js";
 import { runConfigTUI } from "./tui/config-app.js";
 import { ensureConfigDir, loadConfig } from "./utils/config.js";
 import { logger } from "./utils/logger.js";
@@ -95,6 +96,11 @@ async function main(): Promise<void> {
 	if (args.goal === "config") {
 		await runConfigTUI();
 		process.exit(0);
+	}
+
+	if (args.goal === "doctor") {
+		await runDoctor();
+		return;
 	}
 
 	if (args.listProviders) {

@@ -71,6 +71,7 @@ Arguments:
 Subcommands:
   remember <text>         Save a note to project memory for future sessions
   config                  Open configuration TUI
+  doctor                  Run health checks on the CLI environment
 
 Options:
   -a, --agent <name>      Coding agent to use (default: claude-code)
