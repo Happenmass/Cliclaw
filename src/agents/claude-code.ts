@@ -1,6 +1,6 @@
 import type { TmuxBridge } from "../tmux/bridge.js";
-import type { AgentAdapter, AgentCharacteristics, LaunchOptions } from "./adapter.js";
 import { logger } from "../utils/logger.js";
+import type { AgentAdapter, AgentCharacteristics, LaunchOptions } from "./adapter.js";
 
 export class ClaudeCodeAdapter implements AgentAdapter {
 	readonly name = "claude-code";
@@ -13,27 +13,24 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 	}
 
 	async launch(bridge: TmuxBridge, opts: LaunchOptions): Promise<string> {
-		const windowName = opts.windowName || "claude-code";
-
-		// Ensure session exists
+		// Create session with a single window (no extra windows)
 		const hasSession = await bridge.hasSession(opts.sessionName);
 		if (!hasSession) {
 			await bridge.createSession(opts.sessionName, { cwd: opts.workingDir });
 		}
 
-		// Create a new window for this agent
-		const windowIndex = await bridge.createWindow(opts.sessionName, windowName, {
-			cwd: opts.workingDir,
-		});
+		// Use the default window (index 0) of the session
+		const paneTarget = `${opts.sessionName}:0.0`;
 
-		const paneTarget = `${opts.sessionName}:${windowIndex}.0`;
-
-		// Launch Claude Code
+		// Type "claude" and press Enter to launch
 		logger.info("claude-code", `Launching in ${paneTarget}`);
-		await bridge.runInPane(paneTarget, this.command);
+		await bridge.sendText(paneTarget, this.command);
+		await sleep(200);
+		await bridge.sendEnter(paneTarget);
 
-		// Wait for Claude Code to start (look for prompt)
-		await this.waitForReady(bridge, paneTarget);
+		// Wait a fixed 5 seconds for Claude Code to initialize
+		logger.info("claude-code", "Waiting 5s for agent to initialize...");
+		await sleep(5000);
 
 		return paneTarget;
 	}
@@ -41,11 +38,11 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 	async sendPrompt(bridge: TmuxBridge, paneTarget: string, prompt: string): Promise<void> {
 		logger.info("claude-code", `Sending prompt (${prompt.length} chars)`);
 
-		// Send the prompt text
+		// Send the prompt text first
 		await bridge.sendText(paneTarget, prompt);
 
-		// Small delay to ensure text is entered
-		await sleep(100);
+		// Wait 0.2s before pressing Enter (text and Enter must be separate)
+		await sleep(200);
 
 		// Press Enter to submit
 		await bridge.sendEnter(paneTarget);
@@ -61,12 +58,33 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 		if (/\(y\/n\)/i.test(lastLines) || /Allow/i.test(lastLines) || /approve/i.test(lastLines)) {
 			// Yes/no prompt — send 'y'
 			await bridge.sendKeys(paneTarget, "y", { literal: true });
+			await sleep(200);
+			await bridge.sendEnter(paneTarget);
+		} else if (response.startsWith("arrow:")) {
+			// Arrow key selection: "arrow:down:2" means press Down 2 times then Enter
+			const parts = response.split(":");
+			const direction = parts[1] === "up" ? "Up" : "Down";
+			const times = parseInt(parts[2] || "1", 10);
+			for (let i = 0; i < times; i++) {
+				await bridge.sendKeys(paneTarget, direction);
+				await sleep(100);
+			}
+			await sleep(200);
 			await bridge.sendEnter(paneTarget);
 		} else {
-			// General input — send the response text
+			// General input — send the response text, wait 0.2s, then Enter
 			await bridge.sendText(paneTarget, response);
+			await sleep(200);
 			await bridge.sendEnter(paneTarget);
 		}
+	}
+
+	async shutdown(bridge: TmuxBridge, paneTarget: string): Promise<void> {
+		logger.info("claude-code", "Shutting down agent");
+		await bridge.sendText(paneTarget, "/exit");
+		await sleep(200);
+		await bridge.sendEnter(paneTarget);
+		await sleep(1000);
 	}
 
 	async abort(bridge: TmuxBridge, paneTarget: string): Promise<void> {
@@ -105,29 +123,6 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 			confirmKey: "y",
 			abortKey: "Escape",
 		};
-	}
-
-	private async waitForReady(bridge: TmuxBridge, paneTarget: string, timeoutMs = 30000): Promise<void> {
-		const start = Date.now();
-
-		while (Date.now() - start < timeoutMs) {
-			try {
-				const capture = await bridge.capturePane(paneTarget, { startLine: -10 });
-				const content = capture.content;
-
-				// Claude Code shows a prompt when ready
-				if (/>\s*$/m.test(content) || /claude/i.test(content)) {
-					logger.info("claude-code", "Agent is ready");
-					return;
-				}
-			} catch {
-				// Pane might not be ready yet
-			}
-
-			await sleep(1000);
-		}
-
-		logger.warn("claude-code", "Timed out waiting for agent to be ready, proceeding anyway");
 	}
 }
 

@@ -11,6 +11,7 @@ export interface SchedulerOptions {
 	maxParallel: number;
 	autonomyLevel: "low" | "medium" | "high" | "full";
 	defaultAgent: string;
+	goal: string;
 }
 
 export interface SchedulerEvents {
@@ -36,7 +37,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
 	private running = false;
 	private paused = false;
 	private aborted = false;
-	private activePanes = new Map<string, string>(); // taskId → paneTarget
+	private agentPaneTarget: string | null = null;
 
 	constructor(
 		taskGraph: TaskGraph,
@@ -78,12 +79,41 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
 		logger.info("scheduler", "Starting task execution");
 		this.emit("log", "Scheduler started");
 
+		const agentName = this.options.defaultAgent;
+		const adapter = this.agents.get(agentName);
+
+		if (!adapter) {
+			logger.error("scheduler", `No adapter found for agent: ${agentName}`);
+			this.emit("log", `Fatal error: No adapter for agent: ${agentName}`);
+			this.running = false;
+			return;
+		}
+
 		try {
+			// Launch agent once — all tasks reuse this pane
+			const sessionName = generateSessionName(this.options.goal);
+			this.agentPaneTarget = await adapter.launch(this.bridge, {
+				workingDir: process.cwd(),
+				sessionName,
+			});
+			logger.info("scheduler", `Agent launched in ${this.agentPaneTarget}`);
+			this.stateDetector.setCharacteristics(adapter.getCharacteristics());
+
 			await this.runLoop();
 		} catch (err: any) {
 			logger.error("scheduler", `Fatal error: ${err.message}`);
 			this.emit("log", `Fatal error: ${err.message}`);
 		} finally {
+			// Gracefully shut down agent
+			if (this.agentPaneTarget && adapter.shutdown) {
+				try {
+					await adapter.shutdown(this.bridge, this.agentPaneTarget);
+					logger.info("scheduler", "Agent shut down gracefully");
+				} catch (err: any) {
+					logger.warn("scheduler", `Agent shutdown failed: ${err.message}`);
+				}
+			}
+			this.agentPaneTarget = null;
 			this.running = false;
 		}
 	}
@@ -155,15 +185,18 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
 		const agentName = task.agentType || this.options.defaultAgent;
 		const adapter = this.agents.get(agentName);
 
-		if (!adapter) {
-			logger.error("scheduler", `No adapter found for agent: ${agentName}`);
+		if (!adapter || !this.agentPaneTarget) {
+			const reason = !adapter ? `No adapter for agent: ${agentName}` : "Agent pane not available";
+			logger.error("scheduler", reason);
 			this.taskGraph.updateStatus(task.id, "failed", {
 				success: false,
-				summary: `No adapter for agent: ${agentName}`,
+				summary: reason,
 			});
-			this.emit("task_failed", task, `No adapter for agent: ${agentName}`);
+			this.emit("task_failed", task, reason);
 			return;
 		}
+
+		const paneTarget = this.agentPaneTarget;
 
 		// Mark task as running
 		this.taskGraph.updateStatus(task.id, "running");
@@ -175,24 +208,16 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
 			const completedTasks = this.taskGraph.getAllTasks().filter((t) => t.status === "completed");
 			const prompt = task.prompt || (await this.planner.generatePrompt(task, completedTasks));
 
-			// Launch agent in tmux pane
-			const paneTarget = await adapter.launch(this.bridge, {
-				workingDir: process.cwd(),
-				sessionName: `clipilot-${Date.now()}`,
-				windowName: `task-${task.id}`,
-			});
-
-			this.activePanes.set(task.id, paneTarget);
-
-			// Send the prompt
+			// Send the prompt to the reused pane
 			await adapter.sendPrompt(this.bridge, paneTarget, prompt);
 
-			// Monitor execution with state detector
-			this.stateDetector.setCharacteristics(adapter.getCharacteristics());
+			// Set cooldown to avoid misdetecting the previous prompt as completion
+			this.stateDetector.setCooldown(3000);
 
+			// Monitor execution with state detector
 			const result = await this.monitorTask(task, paneTarget, adapter);
 
-			// Update task status
+			// Update task status (pane stays alive regardless of result)
 			this.taskGraph.updateStatus(task.id, result.success ? "completed" : "failed", result);
 
 			if (result.success) {
@@ -214,8 +239,6 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
 			this.taskGraph.updateStatus(task.id, "failed", result);
 			this.emit("task_failed", task, err.message);
 			this.emit("log", `Task error: ${task.title} — ${err.message}`);
-		} finally {
-			this.activePanes.delete(task.id);
 		}
 	}
 
@@ -345,4 +368,13 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function generateSessionName(goal: string): string {
+	const slug = goal
+		.replace(/[^\w\u4e00-\u9fff]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 30)
+		.replace(/-$/, "");
+	return `clipilot-${slug || "session"}`;
 }

@@ -45,6 +45,7 @@ export class StateDetector {
 	private lastChangeTime = 0;
 	private lastContent = "";
 	private callbacks: StateChangeCallback[] = [];
+	private cooldownUntil = 0;
 
 	constructor(bridge: TmuxBridge, llmClient: LLMClient, config: StateDetectorConfig, promptLoader: PromptLoader) {
 		this.bridge = bridge;
@@ -55,6 +56,15 @@ export class StateDetector {
 
 	setCharacteristics(characteristics: AgentCharacteristics): void {
 		this.characteristics = characteristics;
+	}
+
+	setCooldown(durationMs: number): void {
+		this.cooldownUntil = Date.now() + durationMs;
+		logger.info("state-detector", `Cooldown set for ${durationMs}ms`);
+	}
+
+	private isInCooldown(): boolean {
+		return Date.now() < this.cooldownUntil;
 	}
 
 	onStateChange(callback: StateChangeCallback): () => void {
@@ -119,8 +129,8 @@ export class StateDetector {
 			// Content hasn't changed — check if stable long enough
 			const stableDuration = Date.now() - this.lastChangeTime;
 
-			if (stableDuration >= this.config.stableThresholdMs) {
-				// Stable for too long — trigger Layer 2
+			if (stableDuration >= this.config.stableThresholdMs && !this.isInCooldown()) {
+				// Stable for too long and not in cooldown — trigger Layer 2
 				logger.info("state-detector", `Content stable for ${stableDuration}ms, triggering Layer 2 analysis`);
 				const analysis = await this.analyzeState(content, taskContext);
 				this.emit(analysis, content);
@@ -138,8 +148,9 @@ export class StateDetector {
 		if (!this.characteristics) return null;
 
 		const lastLines = content.split("\n").slice(-5).join("\n");
+		const inCooldown = this.isInCooldown();
 
-		// Check error patterns
+		// Check error patterns (always check, even during cooldown)
 		for (const pattern of this.characteristics.errorPatterns) {
 			if (pattern.test(lastLines)) {
 				return {
@@ -149,6 +160,12 @@ export class StateDetector {
 					suggestedAction: { type: "escalate" },
 				};
 			}
+		}
+
+		// During cooldown, skip completion and waiting patterns to avoid
+		// misinterpreting the previous round's prompt as current completion
+		if (inCooldown) {
+			return null;
 		}
 
 		// Check waiting patterns

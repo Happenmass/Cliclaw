@@ -234,6 +234,7 @@ async function main(): Promise<void> {
 			maxParallel: 1,
 			autonomyLevel: args.autonomy,
 			defaultAgent: args.agent,
+			goal,
 		},
 		memory,
 	);

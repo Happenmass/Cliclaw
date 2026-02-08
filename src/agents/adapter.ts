@@ -50,6 +50,9 @@ export interface AgentAdapter {
 	/** Abort the current operation */
 	abort(bridge: TmuxBridge, paneTarget: string): Promise<void>;
 
+	/** Gracefully shut down the agent. Optional — called after all tasks complete. */
+	shutdown?(bridge: TmuxBridge, paneTarget: string): Promise<void>;
+
 	/** Get agent-specific characteristics for state detection */
 	getCharacteristics(): AgentCharacteristics;
 }
