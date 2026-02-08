@@ -247,6 +247,7 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
 			const taskContext = `${task.title}: ${task.description}`;
 			let resolved = false;
 			let waitingInputRetries = 0;
+			let lastWaitingContent = "";
 			const maxWaitingInputRetries = 3;
 
 			const unsubscribe = this.stateDetector.onStateChange(async (analysis, paneContent) => {
@@ -282,6 +283,12 @@ export class Scheduler extends EventEmitter<SchedulerEvents> {
 
 					case "waiting_input": {
 						if (this.options.autonomyLevel === "high" || this.options.autonomyLevel === "full") {
+							// Reset retry counter if content changed (new interaction round)
+							if (paneContent !== lastWaitingContent) {
+								waitingInputRetries = 0;
+								lastWaitingContent = paneContent;
+							}
+
 							// Check retry limit
 							waitingInputRetries++;
 							if (waitingInputRetries > maxWaitingInputRetries) {
