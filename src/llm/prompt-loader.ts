@@ -1,0 +1,67 @@
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { DEFAULT_PROMPTS } from "./prompts.js";
+
+export type PromptName = "planner" | "state-analyzer" | "error-analyzer" | "prompt-generator" | "session-summarizer";
+
+const PROMPT_FILE_MAP: Record<PromptName, string> = {
+	planner: "planner.md",
+	"state-analyzer": "state-analyzer.md",
+	"error-analyzer": "error-analyzer.md",
+	"prompt-generator": "prompt-generator.md",
+	"session-summarizer": "session-summarizer.md",
+};
+
+export class PromptLoader {
+	private prompts: Map<string, string> = new Map();
+	private globalContext: Record<string, string> = {};
+
+	async load(projectDir?: string): Promise<void> {
+		// Layer 1: Built-in defaults
+		for (const [name, content] of Object.entries(DEFAULT_PROMPTS)) {
+			this.prompts.set(name, content);
+		}
+
+		// Layer 2: User-level overrides (~/.clipilot/prompts/*.md)
+		const userPromptsDir = join(homedir(), ".clipilot", "prompts");
+		await this.loadFromDir(userPromptsDir);
+
+		// Layer 3: Project-level overrides ({project}/.clipilot/prompts/*.md)
+		if (projectDir) {
+			const projectPromptsDir = join(projectDir, ".clipilot", "prompts");
+			await this.loadFromDir(projectPromptsDir);
+		}
+	}
+
+	resolve(name: PromptName, context?: Record<string, string>): string {
+		const raw = this.prompts.get(name) ?? "";
+		const mergedContext = { ...this.globalContext, ...context };
+		return this.replaceVars(raw, mergedContext);
+	}
+
+	setGlobalContext(ctx: Record<string, string>): void {
+		this.globalContext = { ...this.globalContext, ...ctx };
+	}
+
+	getRaw(name: PromptName): string {
+		return this.prompts.get(name) ?? "";
+	}
+
+	private async loadFromDir(dir: string): Promise<void> {
+		for (const [name, fileName] of Object.entries(PROMPT_FILE_MAP)) {
+			try {
+				const content = await readFile(join(dir, fileName), "utf-8");
+				this.prompts.set(name, content.trim());
+			} catch {
+				// File doesn't exist — skip silently
+			}
+		}
+	}
+
+	private replaceVars(template: string, context: Record<string, string>): string {
+		return template.replace(/\{\{(\w[\w-]*)\}\}/g, (_match, varName) => {
+			return context[varName] ?? "";
+		});
+	}
+}

@@ -1,0 +1,108 @@
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+
+export interface LLMConfig {
+	provider: string;
+	model: string;
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export interface ProviderKeyConfig {
+	[providerName: string]: {
+		apiKey?: string;
+		baseUrl?: string;
+	};
+}
+
+export interface StateDetectorConfig {
+	pollIntervalMs: number;
+	stableThresholdMs: number;
+	captureLines: number;
+}
+
+export interface TmuxConfig {
+	sessionPrefix: string;
+}
+
+export interface CLIPilotConfig {
+	defaultAgent: string;
+	autonomyLevel: string;
+	llm: LLMConfig;
+	providers?: ProviderKeyConfig;
+	stateDetector: StateDetectorConfig;
+	tmux: TmuxConfig;
+}
+
+const CONFIG_DIR = join(homedir(), ".clipilot");
+const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+
+const DEFAULT_CONFIG: CLIPilotConfig = {
+	defaultAgent: "claude-code",
+	autonomyLevel: "medium",
+	llm: {
+		provider: "anthropic",
+		model: "claude-sonnet-4-5-20250929",
+	},
+	stateDetector: {
+		pollIntervalMs: 2000,
+		stableThresholdMs: 10000,
+		captureLines: 50,
+	},
+	tmux: {
+		sessionPrefix: "clipilot",
+	},
+};
+
+export function getConfigDir(): string {
+	return CONFIG_DIR;
+}
+
+export function getConfigFilePath(): string {
+	return CONFIG_FILE;
+}
+
+export async function ensureConfigDir(): Promise<void> {
+	await mkdir(CONFIG_DIR, { recursive: true });
+}
+
+export async function loadConfig(): Promise<CLIPilotConfig> {
+	if (!existsSync(CONFIG_FILE)) {
+		return { ...DEFAULT_CONFIG };
+	}
+
+	try {
+		const raw = await readFile(CONFIG_FILE, "utf-8");
+		const userConfig = JSON.parse(raw);
+
+		// Deep merge with defaults
+		return {
+			...DEFAULT_CONFIG,
+			...userConfig,
+			llm: { ...DEFAULT_CONFIG.llm, ...userConfig.llm },
+			stateDetector: { ...DEFAULT_CONFIG.stateDetector, ...userConfig.stateDetector },
+			tmux: { ...DEFAULT_CONFIG.tmux, ...userConfig.tmux },
+		};
+	} catch {
+		return { ...DEFAULT_CONFIG };
+	}
+}
+
+export async function saveConfig(config: CLIPilotConfig): Promise<void> {
+	await ensureConfigDir();
+	await writeFile(CONFIG_FILE, JSON.stringify(config, null, "\t"), "utf-8");
+}
+
+export async function getSessionsDir(): Promise<string> {
+	const dir = join(CONFIG_DIR, "sessions");
+	await mkdir(dir, { recursive: true });
+	return dir;
+}
+
+export async function getLogsDir(): Promise<string> {
+	const dir = join(CONFIG_DIR, "logs");
+	await mkdir(dir, { recursive: true });
+	return dir;
+}

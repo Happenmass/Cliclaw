@@ -1,0 +1,274 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { logger } from "../../utils/logger.js";
+import type {
+	LLMProvider,
+	LLMMessage,
+	LLMResponse,
+	LLMStreamEvent,
+	CompletionOptions,
+	ProviderConfig,
+	MessageContent,
+	ThinkingLevel,
+} from "../types.js";
+
+const THINKING_BUDGET: Record<ThinkingLevel, number> = {
+	off: 0,
+	minimal: 1024,
+	low: 4096,
+	medium: 8192,
+	high: 16384,
+};
+
+/**
+ * Anthropic provider using the official SDK.
+ * Anthropic's API format differs from OpenAI's — system prompt is a separate field,
+ * tool calls use a different schema, and thinking/extended output has unique handling.
+ */
+export class AnthropicProvider implements LLMProvider {
+	readonly name: string;
+	readonly protocol = "anthropic" as const;
+
+	private client: Anthropic;
+	private model: string;
+
+	constructor(config: ProviderConfig, opts: { model?: string; apiKey?: string; maxRetries?: number; timeout?: number }) {
+		this.name = config.name;
+		this.model = opts.model || config.defaultModel;
+		this.client = new Anthropic({
+			apiKey: opts.apiKey || process.env[config.apiKeyEnvVar],
+			maxRetries: opts.maxRetries ?? 3,
+			timeout: opts.timeout ?? 60000,
+		});
+	}
+
+	async complete(messages: LLMMessage[], opts?: CompletionOptions): Promise<LLMResponse> {
+		const { systemPrompt, chatMessages } = this.convertMessages(messages, opts?.systemPrompt);
+
+		logger.debug("llm", `[anthropic] Calling ${this.model} (non-streaming)`);
+
+		const params = this.buildParams(chatMessages, systemPrompt, opts, false);
+		const response = await this.client.messages.create(params as any);
+
+		return this.parseResponse(response);
+	}
+
+	async *stream(messages: LLMMessage[], opts?: CompletionOptions): AsyncIterable<LLMStreamEvent> {
+		const { systemPrompt, chatMessages } = this.convertMessages(messages, opts?.systemPrompt);
+
+		logger.debug("llm", `[anthropic] Streaming ${this.model}`);
+
+		const params = this.buildParams(chatMessages, systemPrompt, opts, true);
+		const stream = this.client.messages.stream(params as any);
+
+		let fullText = "";
+		const contentBlocks: MessageContent[] = [];
+
+		for await (const event of stream) {
+			if (event.type === "content_block_start") {
+				const block = event.content_block;
+				if (block.type === "thinking") {
+					// Thinking block start
+				}
+			} else if (event.type === "content_block_delta") {
+				if (event.delta.type === "text_delta") {
+					fullText += event.delta.text;
+					yield { type: "text_delta", delta: event.delta.text };
+				} else if (event.delta.type === "thinking_delta") {
+					yield { type: "thinking_delta", delta: (event.delta as any).thinking };
+				} else if (event.delta.type === "input_json_delta") {
+					yield {
+						type: "tool_call_delta",
+						index: event.index,
+						argumentsDelta: (event.delta as any).partial_json || "",
+					};
+				}
+			}
+		}
+
+		const finalMessage = await stream.finalMessage();
+		const response = this.parseResponse(finalMessage);
+
+		yield {
+			type: "done",
+			response,
+		};
+	}
+
+	// ─── Internal ────────────────────────────────────────
+
+	private buildParams(
+		chatMessages: Anthropic.MessageParam[],
+		systemPrompt: string | Anthropic.TextBlockParam[] | undefined,
+		opts?: CompletionOptions,
+		_stream = false,
+	): any {
+		const params: any = {
+			model: this.model,
+			max_tokens: opts?.maxTokens ?? 4096,
+			messages: chatMessages,
+		};
+
+		if (systemPrompt) {
+			params.system = systemPrompt;
+		}
+
+		if (opts?.temperature !== undefined) {
+			params.temperature = opts.temperature;
+		}
+
+		// Thinking / extended thinking
+		if (opts?.thinking && opts.thinking !== "off") {
+			const budget = THINKING_BUDGET[opts.thinking];
+			params.thinking = {
+				type: "enabled",
+				budget_tokens: budget,
+			};
+			// Extended thinking requires higher max_tokens
+			if (params.max_tokens < budget + 1024) {
+				params.max_tokens = budget + 4096;
+			}
+		}
+
+		// Tools
+		if (opts?.tools && opts.tools.length > 0) {
+			params.tools = opts.tools.map((t) => ({
+				name: t.name,
+				description: t.description,
+				input_schema: t.parameters,
+			}));
+
+			if (opts.toolChoice) {
+				if (opts.toolChoice === "auto") {
+					params.tool_choice = { type: "auto" };
+				} else if (opts.toolChoice === "none") {
+					// Anthropic doesn't have "none" — just don't send tools
+					delete params.tools;
+				} else if (opts.toolChoice === "required") {
+					params.tool_choice = { type: "any" };
+				} else if (typeof opts.toolChoice === "object") {
+					params.tool_choice = { type: "tool", name: opts.toolChoice.name };
+				}
+			}
+		}
+
+		return params;
+	}
+
+	private convertMessages(
+		messages: LLMMessage[],
+		systemPromptOverride?: string,
+	): { systemPrompt: string | undefined; chatMessages: Anthropic.MessageParam[] } {
+		let systemPrompt = systemPromptOverride;
+
+		// Extract system prompt from messages if not provided
+		if (!systemPrompt) {
+			const systemMsg = messages.find((m) => m.role === "system");
+			if (systemMsg) {
+				systemPrompt = typeof systemMsg.content === "string" ? systemMsg.content : undefined;
+			}
+		}
+
+		const chatMessages: Anthropic.MessageParam[] = [];
+
+		for (const msg of messages) {
+			if (msg.role === "system") continue;
+
+			if (msg.role === "tool") {
+				// Anthropic uses tool_result blocks
+				chatMessages.push({
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: msg.toolCallId || "",
+							content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
+						} as any,
+					],
+				});
+				continue;
+			}
+
+			if (typeof msg.content === "string") {
+				chatMessages.push({
+					role: msg.role as "user" | "assistant",
+					content: msg.content,
+				});
+			} else {
+				// Array content
+				const parts: any[] = [];
+
+				for (const block of msg.content) {
+					switch (block.type) {
+						case "text":
+							parts.push({ type: "text", text: block.text });
+							break;
+						case "image":
+							parts.push({
+								type: "image",
+								source: {
+									type: "base64",
+									media_type: block.mimeType,
+									data: block.data,
+								},
+							});
+							break;
+						case "tool_call":
+							parts.push({
+								type: "tool_use",
+								id: block.id,
+								name: block.name,
+								input: block.arguments,
+							});
+							break;
+						case "thinking":
+							parts.push({
+								type: "thinking",
+								thinking: block.thinking,
+							});
+							break;
+					}
+				}
+
+				chatMessages.push({
+					role: msg.role as "user" | "assistant",
+					content: parts,
+				});
+			}
+		}
+
+		return { systemPrompt, chatMessages };
+	}
+
+	private parseResponse(response: any): LLMResponse {
+		const contentBlocks: MessageContent[] = [];
+		let fullText = "";
+
+		for (const block of response.content || []) {
+			if (block.type === "text") {
+				fullText += block.text;
+				contentBlocks.push({ type: "text", text: block.text });
+			} else if (block.type === "thinking") {
+				contentBlocks.push({ type: "thinking", thinking: block.thinking });
+			} else if (block.type === "tool_use") {
+				contentBlocks.push({
+					type: "tool_call",
+					id: block.id,
+					name: block.name,
+					arguments: block.input || {},
+				});
+			}
+		}
+
+		return {
+			content: fullText,
+			contentBlocks,
+			usage: {
+				inputTokens: response.usage?.input_tokens || 0,
+				outputTokens: response.usage?.output_tokens || 0,
+				totalTokens: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0),
+			},
+			stopReason: response.stop_reason || "end_turn",
+			model: response.model || this.model,
+		};
+	}
+}
