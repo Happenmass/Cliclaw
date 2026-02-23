@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Scheduler } from "../../src/core/scheduler.js";
-import { TaskGraph, type Task } from "../../src/core/task.js";
+import { TaskGraph, type Task, type TaskResult } from "../../src/core/task.js";
 import type { TmuxBridge } from "../../src/tmux/bridge.js";
 import type { StateDetector } from "../../src/tmux/state-detector.js";
-import type { Planner } from "../../src/core/planner.js";
+import type { MainAgent } from "../../src/core/main-agent.js";
 import type { AgentAdapter, AgentCharacteristics } from "../../src/agents/adapter.js";
+import { EventEmitter } from "node:events";
+import type { MainAgentEvents } from "../../src/core/main-agent.js";
 
 function makeTask(overrides: Partial<Task> & { id: string; title: string }): Task {
 	return {
@@ -44,51 +46,60 @@ function createMockBridge(): TmuxBridge {
 }
 
 function createMockStateDetector(): StateDetector {
-	const callbacks: Array<(analysis: any, content: string) => void> = [];
 	return {
 		setCharacteristics: vi.fn(),
 		setCooldown: vi.fn(),
-		onStateChange: vi.fn((cb: any) => {
-			callbacks.push(cb);
-			return () => {
-				const idx = callbacks.indexOf(cb);
-				if (idx >= 0) callbacks.splice(idx, 1);
-			};
-		}),
-		startMonitoring: vi.fn((_pane: string, _ctx: string) => {
-			// Simulate immediate completion
-			for (const cb of callbacks) {
-				cb({ status: "completed", confidence: 1, detail: "done" }, ">");
-			}
-		}),
+		onStateChange: vi.fn().mockReturnValue(() => {}),
+		startMonitoring: vi.fn(),
 		stopMonitoring: vi.fn(),
 		analyzeState: vi.fn(),
 		deepAnalyze: vi.fn(),
-		// Expose callbacks for testing
-		_callbacks: callbacks,
 	} as any;
 }
 
-function createMockPlanner(): Planner {
-	return {
-		plan: vi.fn(),
-		replan: vi.fn(),
-		generatePrompt: vi.fn().mockResolvedValue("Do the task"),
-	} as any;
+function createMockMainAgent(
+	executeResults?: TaskResult[],
+): MainAgent & EventEmitter<MainAgentEvents> {
+	const emitter = new EventEmitter<MainAgentEvents>();
+	let callCount = 0;
+
+	const agent = Object.assign(emitter, {
+		setPaneTarget: vi.fn(),
+		setTaskGraph: vi.fn(),
+		executeTask: vi.fn().mockImplementation(async (_task: Task) => {
+			const result = executeResults?.[callCount] ?? { success: true, summary: "Done" };
+			callCount++;
+			return result;
+		}),
+	});
+
+	return agent as any;
 }
 
 describe("Scheduler", () => {
 	let adapter: AgentAdapter;
 	let bridge: TmuxBridge;
 	let stateDetector: ReturnType<typeof createMockStateDetector>;
-	let planner: Planner;
+	let mainAgent: ReturnType<typeof createMockMainAgent>;
 
 	beforeEach(() => {
 		adapter = createMockAdapter();
 		bridge = createMockBridge();
 		stateDetector = createMockStateDetector();
-		planner = createMockPlanner();
+		mainAgent = createMockMainAgent();
 	});
+
+	function createScheduler(graph: TaskGraph) {
+		const agents = new Map([["mock", adapter]]);
+		return new Scheduler(
+			graph,
+			bridge,
+			stateDetector as any,
+			mainAgent as any,
+			agents,
+			{ maxParallel: 1, autonomyLevel: "high", defaultAgent: "mock", goal: "test goal" },
+		);
+	}
 
 	it("should launch agent only once for multiple tasks", async () => {
 		const graph = new TaskGraph();
@@ -96,104 +107,81 @@ describe("Scheduler", () => {
 		graph.addTask(makeTask({ id: "2", title: "Task 2" }));
 		graph.addTask(makeTask({ id: "3", title: "Task 3" }));
 
-		const agents = new Map([["mock", adapter]]);
-		const scheduler = new Scheduler(
-			graph,
-			bridge,
-			stateDetector as any,
-			planner,
-			agents,
-			{ maxParallel: 1, autonomyLevel: "high", defaultAgent: "mock", goal: "test goal" },
-		);
-
+		const scheduler = createScheduler(graph);
 		await scheduler.start();
 
 		// launch() should be called exactly once
 		expect(adapter.launch).toHaveBeenCalledTimes(1);
+		// MainAgent.executeTask should be called once per task
+		expect(mainAgent.executeTask).toHaveBeenCalledTimes(3);
+	});
 
-		// sendPrompt() should be called once per task
-		expect(adapter.sendPrompt).toHaveBeenCalledTimes(3);
+	it("should delegate task execution to MainAgent", async () => {
+		const graph = new TaskGraph();
+		const task = makeTask({ id: "1", title: "Task 1" });
+		graph.addTask(task);
 
-		// All three calls should use the same paneTarget
-		const calls = (adapter.sendPrompt as any).mock.calls;
-		expect(calls[0][1]).toBe("mock-session:0.0");
-		expect(calls[1][1]).toBe("mock-session:0.0");
-		expect(calls[2][1]).toBe("mock-session:0.0");
+		const scheduler = createScheduler(graph);
+		await scheduler.start();
+
+		expect(mainAgent.executeTask).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "1", title: "Task 1" }),
+		);
+	});
+
+	it("should set pane target on MainAgent after launch", async () => {
+		const graph = new TaskGraph();
+		graph.addTask(makeTask({ id: "1", title: "Task 1" }));
+
+		const scheduler = createScheduler(graph);
+		await scheduler.start();
+
+		expect(mainAgent.setPaneTarget).toHaveBeenCalledWith("mock-session:0.0");
 	});
 
 	it("should call shutdown after all tasks complete", async () => {
 		const graph = new TaskGraph();
 		graph.addTask(makeTask({ id: "1", title: "Task 1" }));
 
-		const agents = new Map([["mock", adapter]]);
-		const scheduler = new Scheduler(
-			graph,
-			bridge,
-			stateDetector as any,
-			planner,
-			agents,
-			{ maxParallel: 1, autonomyLevel: "high", defaultAgent: "mock", goal: "test goal" },
-		);
-
+		const scheduler = createScheduler(graph);
 		await scheduler.start();
 
 		expect(adapter.shutdown).toHaveBeenCalledTimes(1);
 		expect(adapter.shutdown).toHaveBeenCalledWith(bridge, "mock-session:0.0");
 	});
 
-	it("should set cooldown after each sendPrompt", async () => {
+	it("should update task status based on MainAgent result", async () => {
+		mainAgent = createMockMainAgent([
+			{ success: true, summary: "Completed" },
+			{ success: false, summary: "Failed", errors: ["some error"] },
+		]);
+
+		const graph = new TaskGraph();
+		graph.addTask(makeTask({ id: "1", title: "Task 1" }));
+		graph.addTask(makeTask({ id: "2", title: "Task 2" }));
+
+		const scheduler = createScheduler(graph);
+		await scheduler.start();
+
+		expect(graph.getTask("1")?.status).toBe("completed");
+		expect(graph.getTask("2")?.status).toBe("failed");
+	});
+
+	it("should handle MainAgent executeTask throwing an error", async () => {
+		mainAgent = createMockMainAgent();
+		(mainAgent.executeTask as any).mockRejectedValueOnce(new Error("Unexpected crash"));
+
 		const graph = new TaskGraph();
 		graph.addTask(makeTask({ id: "1", title: "Task 1" }));
 
-		const agents = new Map([["mock", adapter]]);
-		const scheduler = new Scheduler(
-			graph,
-			bridge,
-			stateDetector as any,
-			planner,
-			agents,
-			{ maxParallel: 1, autonomyLevel: "high", defaultAgent: "mock", goal: "test goal" },
-		);
+		const failSpy = vi.fn();
+		const scheduler = createScheduler(graph);
+		scheduler.on("task_failed", failSpy);
 
 		await scheduler.start();
 
-		expect(stateDetector.setCooldown).toHaveBeenCalledWith(3000);
-	});
-
-	it("should keep pane alive after task failure", async () => {
-		const graph = new TaskGraph();
-		graph.addTask(makeTask({ id: "1", title: "Task 1", maxAttempts: 1 }));
-		graph.addTask(makeTask({ id: "2", title: "Task 2", maxAttempts: 1 }));
-
-		// Make first task fail (no retry since maxAttempts=1), second succeed
-		let callCount = 0;
-		stateDetector.startMonitoring = vi.fn((_pane: string, _ctx: string) => {
-			callCount++;
-			for (const cb of stateDetector._callbacks) {
-				if (callCount === 1) {
-					cb({ status: "error", confidence: 0.9, detail: "error occurred", suggestedAction: { type: "escalate" } }, "Error: something");
-				} else {
-					cb({ status: "completed", confidence: 1, detail: "done" }, ">");
-				}
-			}
-		});
-
-		const agents = new Map([["mock", adapter]]);
-		const scheduler = new Scheduler(
-			graph,
-			bridge,
-			stateDetector as any,
-			planner,
-			agents,
-			{ maxParallel: 1, autonomyLevel: "high", defaultAgent: "mock", goal: "test goal" },
-		);
-
-		await scheduler.start();
-
-		// launch still only called once despite failure
-		expect(adapter.launch).toHaveBeenCalledTimes(1);
-		// sendPrompt called for both tasks (first failed, second succeeded)
-		expect(adapter.sendPrompt).toHaveBeenCalledTimes(2);
+		expect(graph.getTask("1")?.status).toBe("failed");
+		expect(failSpy).toHaveBeenCalled();
 	});
 
 	it("should skip shutdown if adapter does not implement it", async () => {
@@ -208,7 +196,7 @@ describe("Scheduler", () => {
 			graph,
 			bridge,
 			stateDetector as any,
-			planner,
+			mainAgent as any,
 			agents,
 			{ maxParallel: 1, autonomyLevel: "high", defaultAgent: "mock", goal: "test goal" },
 		);
@@ -218,105 +206,71 @@ describe("Scheduler", () => {
 		expect(graph.getTask("1")?.status).toBe("completed");
 	});
 
-	it("should trigger Layer 2 analysis when waiting_input has no value", async () => {
+	it("should emit all_complete when all tasks finish", async () => {
 		const graph = new TaskGraph();
 		graph.addTask(makeTask({ id: "1", title: "Task 1" }));
 
-		// Layer 2 analyzeState returns a value for the interaction
-		stateDetector.analyzeState = vi.fn().mockResolvedValue({
-			status: "waiting_input",
-			confidence: 0.9,
-			detail: "Menu selection needed",
-			suggestedAction: { type: "send_keys", value: "Enter" },
-		});
-
-		// startMonitoring emits waiting_input WITHOUT a value (Layer 1.5 style)
-		// then on next poll emits completed
-		let monitorCallCount = 0;
-		stateDetector.startMonitoring = vi.fn((_pane: string, _ctx: string) => {
-			monitorCallCount++;
-			for (const cb of stateDetector._callbacks) {
-				if (monitorCallCount === 1) {
-					// First: waiting_input with no value
-					cb(
-						{ status: "waiting_input", confidence: 0.6, detail: "Agent waiting", suggestedAction: { type: "send_keys" } },
-						"Do you want to proceed?\n❯ 1. Yes\n  2. No",
-					);
-					// Then immediately complete (simulating the response worked)
-					cb({ status: "completed", confidence: 1, detail: "done" }, ">");
-				} else {
-					cb({ status: "completed", confidence: 1, detail: "done" }, ">");
-				}
-			}
-		});
-
-		const agents = new Map([["mock", adapter]]);
-		const scheduler = new Scheduler(
-			graph,
-			bridge,
-			stateDetector as any,
-			planner,
-			agents,
-			{ maxParallel: 1, autonomyLevel: "high", defaultAgent: "mock", goal: "test goal" },
-		);
+		const allCompleteSpy = vi.fn();
+		const scheduler = createScheduler(graph);
+		scheduler.on("all_complete", allCompleteSpy);
 
 		await scheduler.start();
 
-		// analyzeState should have been called (Layer 2 triggered)
-		expect(stateDetector.analyzeState).toHaveBeenCalled();
-		// sendResponse should have been called with the LLM-provided value
-		expect(adapter.sendResponse).toHaveBeenCalledWith(bridge, "mock-session:0.0", "Enter");
-		// cooldown should be set after sendResponse
-		expect(stateDetector.setCooldown).toHaveBeenCalledWith(3000);
+		expect(allCompleteSpy).toHaveBeenCalledWith(
+			expect.objectContaining({ completed: 1, total: 1 }),
+		);
 	});
 
-	it("should escalate after 3 failed waiting_input retries", async () => {
+	it("should forward MainAgent events", async () => {
 		const graph = new TaskGraph();
-		graph.addTask(makeTask({ id: "1", title: "Task 1", maxAttempts: 1 }));
+		graph.addTask(makeTask({ id: "1", title: "Task 1" }));
 
-		// Layer 2 always returns a value but the interaction never resolves
-		stateDetector.analyzeState = vi.fn().mockResolvedValue({
-			status: "waiting_input",
-			confidence: 0.8,
-			detail: "Menu still showing",
-			suggestedAction: { type: "send_keys", value: "Enter" },
-		});
+		const logSpy = vi.fn();
+		const scheduler = createScheduler(graph);
+		scheduler.on("log", logSpy);
 
-		// Emit waiting_input 4 times (3 retries + 1 that triggers escalation),
-		// then complete to avoid hanging
-		stateDetector.startMonitoring = vi.fn((_pane: string, _ctx: string) => {
-			for (const cb of stateDetector._callbacks) {
-				// 4 waiting_input events: first 3 get auto-responded, 4th triggers escalation
-				for (let i = 0; i < 4; i++) {
-					cb(
-						{ status: "waiting_input", confidence: 0.6, detail: "Still waiting", suggestedAction: { type: "send_keys" } },
-						"Menu prompt",
-					);
-				}
-				// Finally complete to resolve the promise
-				cb({ status: "completed", confidence: 1, detail: "done" }, ">");
-			}
-		});
+		// Emit a log event from MainAgent
+		mainAgent.emit("log", "test log message");
 
-		const needHumanSpy = vi.fn();
-		const agents = new Map([["mock", adapter]]);
+		expect(logSpy).toHaveBeenCalledWith("test log message");
+	});
+
+	it("should stop if no agent adapter found", async () => {
+		const graph = new TaskGraph();
+		graph.addTask(makeTask({ id: "1", title: "Task 1" }));
+
+		const agents = new Map<string, AgentAdapter>();
 		const scheduler = new Scheduler(
 			graph,
 			bridge,
 			stateDetector as any,
-			planner,
+			mainAgent as any,
 			agents,
-			{ maxParallel: 1, autonomyLevel: "high", defaultAgent: "mock", goal: "test goal" },
+			{ maxParallel: 1, autonomyLevel: "high", defaultAgent: "nonexistent", goal: "test" },
 		);
-		scheduler.on("need_human", needHumanSpy);
 
 		await scheduler.start();
 
-		// sendResponse should be called exactly 3 times (the limit)
-		expect(adapter.sendResponse).toHaveBeenCalledTimes(3);
-		// need_human should have been emitted for the 4th attempt
-		expect(needHumanSpy).toHaveBeenCalled();
-		const reason = needHumanSpy.mock.calls[0][1];
-		expect(reason).toContain("3");
+		// Task should remain pending — never executed
+		expect(graph.getTask("1")?.status).toBe("pending");
+		expect(mainAgent.executeTask).not.toHaveBeenCalled();
+	});
+
+	it("should respect task dependencies", async () => {
+		const graph = new TaskGraph();
+		graph.addTask(makeTask({ id: "1", title: "Task 1" }));
+		graph.addTask(makeTask({ id: "2", title: "Task 2", dependencies: ["1"] }));
+
+		const executionOrder: string[] = [];
+		mainAgent = createMockMainAgent();
+		(mainAgent.executeTask as any).mockImplementation(async (task: Task) => {
+			executionOrder.push(task.id);
+			return { success: true, summary: "Done" };
+		});
+
+		const scheduler = createScheduler(graph);
+		await scheduler.start();
+
+		expect(executionOrder).toEqual(["1", "2"]);
 	});
 });

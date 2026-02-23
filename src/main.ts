@@ -6,10 +6,13 @@ import chalk from "chalk";
 import type { AgentAdapter } from "./agents/adapter.js";
 import { ClaudeCodeAdapter } from "./agents/claude-code.js";
 import { parseCliArgs, printHelp, printVersion } from "./cli.js";
+import { ContextManager } from "./core/context-manager.js";
+import { MainAgent } from "./core/main-agent.js";
 import { Memory } from "./core/memory.js";
 import { Planner } from "./core/planner.js";
 import { Scheduler } from "./core/scheduler.js";
 import { Session } from "./core/session.js";
+import { SignalRouter } from "./core/signal-router.js";
 import { LLMClient } from "./llm/client.js";
 import { PromptLoader } from "./llm/prompt-loader.js";
 import { getAllProviders } from "./llm/providers/registry.js";
@@ -195,7 +198,8 @@ async function main(): Promise<void> {
 
 	// Setup agent adapters
 	const agents = new Map<string, AgentAdapter>();
-	agents.set("claude-code", new ClaudeCodeAdapter());
+	const defaultAdapter = new ClaudeCodeAdapter();
+	agents.set("claude-code", defaultAdapter);
 
 	// Create session
 	const session = new Session(goal, args.agent, args.autonomy);
@@ -230,11 +234,34 @@ async function main(): Promise<void> {
 	console.log(chalk.cyan("Executing...\n"));
 	session.setStatus("executing");
 
+	// Initialize MainAgent and its dependencies
+	const contextManager = new ContextManager({
+		llmClient,
+		promptLoader,
+	});
+	contextManager.updateModule("goal", goal);
+	contextManager.updateModule("memory", memoryContent || "");
+
+	const signalRouter = new SignalRouter(stateDetector, bridge, contextManager, taskGraph);
+
+	const defaultAgentAdapter = agents.get(args.agent) ?? defaultAdapter;
+	const mainAgent = new MainAgent({
+		contextManager,
+		signalRouter,
+		llmClient,
+		planner,
+		adapter: defaultAgentAdapter,
+		bridge,
+		stateDetector,
+		taskGraph,
+		goal,
+	});
+
 	const scheduler = new Scheduler(
 		taskGraph,
 		bridge,
 		stateDetector,
-		planner,
+		mainAgent,
 		agents,
 		{
 			maxParallel: 1,
@@ -242,7 +269,6 @@ async function main(): Promise<void> {
 			defaultAgent: args.agent,
 			goal,
 		},
-		memory,
 	);
 
 	// Log events

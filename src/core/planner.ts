@@ -125,21 +125,4 @@ export class Planner {
 		logger.info("planner", `Replan created: ${graph.getProgress().total} total tasks`);
 		return graph;
 	}
-
-	async generatePrompt(task: Task, completedTasks: Task[]): Promise<string> {
-		const contextParts = [`Task to accomplish: ${task.title}\n${task.description}`];
-
-		if (completedTasks.length > 0) {
-			contextParts.push(
-				`\nPreviously completed tasks:\n${completedTasks.map((t) => `- ${t.title}: ${t.result?.summary || "completed"}`).join("\n")}`,
-			);
-		}
-
-		const response = await this.llmClient.complete([{ role: "user", content: contextParts.join("\n") }], {
-			systemPrompt: this.promptLoader.resolve("prompt-generator"),
-			temperature: 0.3,
-		});
-
-		return response.content;
-	}
 }
