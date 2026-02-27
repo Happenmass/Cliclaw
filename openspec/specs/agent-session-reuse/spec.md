@@ -1,13 +1,13 @@
 ### Requirement: Scheduler 在单个 agent 实例中串行执行所有 task
-Scheduler SHALL 在 `start()` 中调用一次 `adapter.launch()` 获取 paneTarget，所有后续 task SHALL 复用同一个 paneTarget 发送指令，而非为每个 task 启动新实例。
+Scheduler SHALL 在 `start()` 中调用一次 `adapter.launch()` 获取 paneTarget，所有后续 task SHALL 复用同一个 paneTarget。Scheduler 的 `executeTask()` SHALL 委托给 `mainAgent.executeTask(task)` 执行，而非直接调用 adapter/stateDetector。Scheduler SHALL NOT 包含任何状态分析或决策逻辑。
 
-#### Scenario: 多个 task 复用同一个 pane
+#### Scenario: Scheduler 委托 executeTask 给 MainAgent
 - **WHEN** Scheduler 有 3 个 task 待执行
-- **THEN** `adapter.launch()` 仅被调用 1 次，3 个 task 的 `sendPrompt()` 均使用同一个 paneTarget
+- **THEN** `adapter.launch()` 仅被调用 1 次，每个 task 的执行通过 `mainAgent.executeTask(task)` 完成
 
-#### Scenario: task 失败后 pane 不销毁
-- **WHEN** 某个 task 执行失败
-- **THEN** paneTarget 保持有效，后续 task 或 replan 的 task 继续使用同一个 pane
+#### Scenario: task 失败后由 MainAgent 决定后续行动
+- **WHEN** `mainAgent.executeTask(task)` 返回 `{ success: false }`
+- **THEN** Scheduler 根据 MainAgent 返回的结果更新 TaskGraph 状态（MainAgent 内部已通过 tool use 决定了具体行动如 replan 或 escalate）
 
 ### Requirement: AgentAdapter 支持 shutdown 生命周期
 AgentAdapter 接口 SHALL 新增可选方法 `shutdown(bridge, paneTarget): Promise<void>`。Scheduler SHALL 在所有 task 完成后调用 `shutdown()`（若 adapter 实现了该方法）。
@@ -21,10 +21,10 @@ AgentAdapter 接口 SHALL 新增可选方法 `shutdown(bridge, paneTarget): Prom
 - **THEN** Scheduler 跳过 shutdown 调用，不报错
 
 ### Requirement: 发送指令后的静默期
-StateDetector SHALL 支持设置静默期（cooldown）。在静默期内，completionPattern 的匹配 SHALL 被忽略，避免将上一轮的 `>` 提示符误判为当前指令已完成。
+StateDetector SHALL 支持设置静默期（cooldown）。在静默期内，completionPattern 的匹配 SHALL 被忽略，避免将上一轮的 `>` 提示符误判为当前指令已完成。静默期 SHALL 由 MainAgent 在调用 `send_to_agent` tool 后通过 `stateDetector.setCooldown()` 设置。
 
 #### Scenario: 指令发送后不误判完成
-- **WHEN** `sendPrompt()` 发送指令后立即设置 3 秒静默期
+- **WHEN** MainAgent 通过 `send_to_agent` 发送指令后设置 3 秒静默期
 - **AND** StateDetector 在 1 秒后 poll 到 `>` 提示符
 - **THEN** 该 `>` 匹配被忽略，不触发 completed 状态
 

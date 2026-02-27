@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import type { AgentAdapter } from "../agents/adapter.js";
 import type { LLMClient } from "../llm/client.js";
 import type { ToolCallContent, ToolDefinition } from "../llm/types.js";
@@ -176,6 +178,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 					description:
 						'Session name (will be prefixed with "clipilot-" if not already). If omitted, auto-generated from the goal.',
 				},
+				working_dir: {
+					type: "string",
+					description:
+						"Working directory for the agent. The tmux session and coding agent will be launched in this directory. Use exec_command to explore and determine the correct directory before creating a session. Defaults to process.cwd() if omitted.",
+				},
 			},
 		},
 	},
@@ -186,6 +193,27 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 		parameters: {
 			type: "object",
 			properties: {},
+		},
+	},
+	{
+		name: "exec_command",
+		description:
+			"Execute a bash command directly for read-only reconnaissance. Use for reading files, browsing directories, searching code, and checking environment info. NEVER use for modifications, tests, builds, git operations, or any command with side effects — those MUST go through send_to_agent.",
+		parameters: {
+			type: "object",
+			properties: {
+				command: { type: "string", description: "The bash command to execute (read-only operations only)" },
+				cwd: {
+					type: "string",
+					description:
+						"Working directory for execution. Defaults to session working directory if a session exists, otherwise process.cwd().",
+				},
+				timeout: {
+					type: "number",
+					description: "Timeout in milliseconds (default: 30000)",
+				},
+			},
+			required: ["command"],
 		},
 	},
 ];
@@ -201,6 +229,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private stateDetector: StateDetector;
 	private goal: string;
 	private paneTarget: string | null = null;
+	private sessionWorkingDir: string = process.cwd();
 	private memoryStore: MemoryStore | null = null;
 	private embeddingProvider: EmbeddingProvider | null = null;
 	private skillRegistry: SkillRegistry | null = null;
@@ -247,6 +276,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 	getPaneTarget(): string | null {
 		return this.paneTarget;
+	}
+
+	getSessionWorkingDir(): string {
+		return this.sessionWorkingDir;
 	}
 
 	async executeGoal(goal: string): Promise<GoalResult> {
@@ -597,6 +630,24 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					sessionName = `clipilot-${sessionName}`;
 				}
 
+				const workingDir = (args.working_dir as string | undefined) ?? process.cwd();
+
+				// Validate directory exists
+				try {
+					const dirStat = await stat(workingDir);
+					if (!dirStat.isDirectory()) {
+						return {
+							output: `Error: "${workingDir}" is not a directory.`,
+							terminal: false,
+						};
+					}
+				} catch {
+					return {
+						output: `Error: Directory "${workingDir}" does not exist.`,
+						terminal: false,
+					};
+				}
+
 				const exists = await this.bridge.hasSession(sessionName);
 				if (exists) {
 					return {
@@ -607,13 +658,17 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 				try {
 					this.paneTarget = await this.adapter.launch(this.bridge, {
-						workingDir: process.cwd(),
+						workingDir,
 						sessionName,
 					});
+					this.sessionWorkingDir = workingDir;
 					this.stateDetector.setCharacteristics(this.adapter.getCharacteristics());
-					logger.info("main-agent", `Session created: ${sessionName}, pane: ${this.paneTarget}`);
+					logger.info(
+						"main-agent",
+						`Session created: ${sessionName}, pane: ${this.paneTarget}, cwd: ${workingDir}`,
+					);
 					return {
-						output: `Session "${sessionName}" created. Agent launched in ${this.paneTarget}. You can now use send_to_agent.`,
+						output: `Session "${sessionName}" created in ${workingDir}. Agent launched in ${this.paneTarget}. You can now use send_to_agent.`,
 						terminal: false,
 					};
 				} catch (err: any) {
@@ -636,6 +691,46 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					return { output: `Found ${sessions.length} clipilot session(s):\n${formatted}`, terminal: false };
 				} catch (err: any) {
 					return { output: `Error listing sessions: ${err.message}`, terminal: false };
+				}
+			}
+
+			case "exec_command": {
+				const command = args.command as string;
+				const cwd = (args.cwd as string | undefined) ?? this.sessionWorkingDir;
+				const timeout = (args.timeout as number | undefined) ?? 30000;
+				const MAX_OUTPUT = 10000;
+
+				try {
+					const execFileAsync = promisify(execFile);
+					const { stdout, stderr } = await execFileAsync("bash", ["-c", command], {
+						cwd,
+						timeout,
+						maxBuffer: 1024 * 1024,
+					});
+					let output = stdout + (stderr ? `\n${stderr}` : "");
+					if (output.length > MAX_OUTPUT) {
+						const totalLen = output.length;
+						output = `${output.slice(0, MAX_OUTPUT)}\n\n[Output truncated: ${totalLen} chars total, showing first ${MAX_OUTPUT}]`;
+					}
+					return { output: output || "(no output)", terminal: false };
+				} catch (err: any) {
+					// Timeout
+					if (err.killed || err.signal === "SIGTERM") {
+						return {
+							output: `[exec_command timeout after ${timeout}ms]\nCommand: ${command}`,
+							terminal: false,
+						};
+					}
+					// Non-zero exit code
+					if (err.code !== undefined && typeof err.code === "number") {
+						let output = `[exit code: ${err.code}]\n${err.stderr || ""}${err.stdout || ""}`.trim();
+						if (output.length > MAX_OUTPUT) {
+							const totalLen = output.length;
+							output = `${output.slice(0, MAX_OUTPUT)}\n\n[Output truncated: ${totalLen} chars total, showing first ${MAX_OUTPUT}]`;
+						}
+						return { output, terminal: false };
+					}
+					return { output: `exec_command error: ${err.message}`, terminal: false };
 				}
 			}
 

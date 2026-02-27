@@ -598,6 +598,428 @@ describe("MainAgent", () => {
 		});
 	});
 
+	describe("exec_command tool", () => {
+		it("should execute a basic command and return output", async () => {
+			const agent = setupAgent([
+				{
+					content: "",
+					contentBlocks: [
+						{
+							type: "tool_call",
+							id: "tc1",
+							name: "exec_command",
+							arguments: { command: "echo hello" },
+						},
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+				{
+					content: "",
+					contentBlocks: [
+						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+			]);
+
+			await agent.executeGoal("Test");
+
+			expect(mockCtx.addMessage).toHaveBeenCalledWith(
+				expect.objectContaining({
+					role: "tool",
+					content: expect.stringContaining("hello"),
+				}),
+			);
+		});
+
+		it("should use sessionWorkingDir when no cwd specified and session exists", async () => {
+			const agent = setupAgent([
+				{
+					content: "",
+					contentBlocks: [
+						{
+							type: "tool_call",
+							id: "tc0",
+							name: "create_session",
+							arguments: { working_dir: "/tmp" },
+						},
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+				{
+					content: "",
+					contentBlocks: [
+						{
+							type: "tool_call",
+							id: "tc1",
+							name: "exec_command",
+							arguments: { command: "pwd" },
+						},
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+				{
+					content: "",
+					contentBlocks: [
+						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+			]);
+
+			await agent.executeGoal("Test");
+
+			// The pwd output should contain /tmp (the sessionWorkingDir)
+			const toolResultCalls = mockCtx.addMessage.mock.calls.filter(
+				(c: any) => c[0].role === "tool" && typeof c[0].content === "string" && c[0].content.includes("/tmp"),
+			);
+			// At least one tool result should reference /tmp (either create_session output or pwd output)
+			expect(toolResultCalls.length).toBeGreaterThanOrEqual(1);
+			expect(agent.getSessionWorkingDir()).toBe("/tmp");
+		});
+
+		it("should use explicit cwd when provided", async () => {
+			const agent = setupAgent([
+				{
+					content: "",
+					contentBlocks: [
+						{
+							type: "tool_call",
+							id: "tc1",
+							name: "exec_command",
+							arguments: { command: "pwd", cwd: "/tmp" },
+						},
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+				{
+					content: "",
+					contentBlocks: [
+						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+			]);
+
+			await agent.executeGoal("Test");
+
+			expect(mockCtx.addMessage).toHaveBeenCalledWith(
+				expect.objectContaining({
+					role: "tool",
+					content: expect.stringMatching(/\/tmp|\/private\/tmp/),
+				}),
+			);
+		});
+
+		it("should truncate output exceeding 10000 chars", async () => {
+			// Generate a command that produces >10000 chars
+			const agent = setupAgent([
+				{
+					content: "",
+					contentBlocks: [
+						{
+							type: "tool_call",
+							id: "tc1",
+							name: "exec_command",
+							arguments: { command: "python3 -c \"print('x' * 20000)\"" },
+						},
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+				{
+					content: "",
+					contentBlocks: [
+						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+			]);
+
+			await agent.executeGoal("Test");
+
+			expect(mockCtx.addMessage).toHaveBeenCalledWith(
+				expect.objectContaining({
+					role: "tool",
+					content: expect.stringContaining("[Output truncated:"),
+				}),
+			);
+		});
+
+		it("should handle non-zero exit code", async () => {
+			const agent = setupAgent([
+				{
+					content: "",
+					contentBlocks: [
+						{
+							type: "tool_call",
+							id: "tc1",
+							name: "exec_command",
+							arguments: { command: "cat /nonexistent_file_12345" },
+						},
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+				{
+					content: "",
+					contentBlocks: [
+						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+			]);
+
+			await agent.executeGoal("Test");
+
+			expect(mockCtx.addMessage).toHaveBeenCalledWith(
+				expect.objectContaining({
+					role: "tool",
+					content: expect.stringContaining("[exit code:"),
+				}),
+			);
+		});
+
+		it("should handle command timeout", async () => {
+			const agent = setupAgent([
+				{
+					content: "",
+					contentBlocks: [
+						{
+							type: "tool_call",
+							id: "tc1",
+							name: "exec_command",
+							arguments: { command: "sleep 10", timeout: 100 },
+						},
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+				{
+					content: "",
+					contentBlocks: [
+						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+			]);
+
+			await agent.executeGoal("Test");
+
+			expect(mockCtx.addMessage).toHaveBeenCalledWith(
+				expect.objectContaining({
+					role: "tool",
+					content: expect.stringContaining("timeout"),
+				}),
+			);
+		}, 10000);
+
+		it("should default to process.cwd() when no session exists", async () => {
+			const agent = setupAgent([
+				{
+					content: "",
+					contentBlocks: [
+						{
+							type: "tool_call",
+							id: "tc1",
+							name: "exec_command",
+							arguments: { command: "pwd" },
+						},
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+				{
+					content: "",
+					contentBlocks: [
+						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+			]);
+
+			await agent.executeGoal("Test");
+
+			expect(mockCtx.addMessage).toHaveBeenCalledWith(
+				expect.objectContaining({
+					role: "tool",
+					content: expect.stringContaining(process.cwd()),
+				}),
+			);
+		});
+	});
+
+	describe("create_session with working_dir", () => {
+		it("should pass working_dir to adapter.launch", async () => {
+			const agent = setupAgent([
+				{
+					content: "",
+					contentBlocks: [
+						{
+							type: "tool_call",
+							id: "tc0",
+							name: "create_session",
+							arguments: { session_name: "test-wd", working_dir: "/tmp" },
+						},
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+				{
+					content: "",
+					contentBlocks: [
+						{ type: "tool_call", id: "tc1", name: "mark_complete", arguments: { summary: "Done" } },
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+			]);
+
+			await agent.executeGoal("Test");
+
+			expect(mockAdapter.launch).toHaveBeenCalledWith(mockBridge, {
+				workingDir: "/tmp",
+				sessionName: "clipilot-test-wd",
+			});
+		});
+
+		it("should update sessionWorkingDir on create_session", async () => {
+			const agent = setupAgent([
+				{
+					content: "",
+					contentBlocks: [
+						{
+							type: "tool_call",
+							id: "tc0",
+							name: "create_session",
+							arguments: { working_dir: "/tmp" },
+						},
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+				{
+					content: "",
+					contentBlocks: [
+						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+			]);
+
+			// Before session creation, should be process.cwd()
+			expect(agent.getSessionWorkingDir()).toBe(process.cwd());
+
+			await agent.executeGoal("Test");
+
+			expect(agent.getSessionWorkingDir()).toBe("/tmp");
+		});
+
+		it("should return error when working_dir does not exist", async () => {
+			const agent = setupAgent([
+				{
+					content: "",
+					contentBlocks: [
+						{
+							type: "tool_call",
+							id: "tc0",
+							name: "create_session",
+							arguments: { working_dir: "/nonexistent_dir_12345" },
+						},
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+				{
+					content: "",
+					contentBlocks: [
+						{ type: "tool_call", id: "tc1", name: "mark_failed", arguments: { reason: "No dir" } },
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+			]);
+
+			await agent.executeGoal("Test");
+
+			expect(mockCtx.addMessage).toHaveBeenCalledWith(
+				expect.objectContaining({
+					role: "tool",
+					content: expect.stringContaining("does not exist"),
+				}),
+			);
+			expect(mockAdapter.launch).not.toHaveBeenCalled();
+		});
+
+		it("should fallback to process.cwd() when working_dir omitted", async () => {
+			const agent = setupAgent([
+				{
+					content: "",
+					contentBlocks: [
+						{
+							type: "tool_call",
+							id: "tc0",
+							name: "create_session",
+							arguments: { session_name: "no-wd" },
+						},
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+				{
+					content: "",
+					contentBlocks: [
+						{ type: "tool_call", id: "tc1", name: "mark_complete", arguments: { summary: "Done" } },
+					],
+					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+					stopReason: "tool_use",
+					model: "test",
+				},
+			]);
+
+			await agent.executeGoal("Test");
+
+			expect(mockAdapter.launch).toHaveBeenCalledWith(mockBridge, {
+				workingDir: process.cwd(),
+				sessionName: "clipilot-no-wd",
+			});
+		});
+	});
+
 	describe("compression", () => {
 		it("should trigger compression when threshold exceeded", async () => {
 			const agent = setupAgent([
