@@ -1,14 +1,14 @@
 import { logger } from "../../utils/logger.js";
 import type {
-	LLMProvider,
+	CompletionOptions,
 	LLMMessage,
+	LLMProvider,
 	LLMResponse,
 	LLMStreamEvent,
-	CompletionOptions,
-	ProviderConfig,
 	MessageContent,
-	ToolCallContent,
+	ProviderConfig,
 	TextContent,
+	ToolCallContent,
 } from "../types.js";
 
 /**
@@ -27,7 +27,10 @@ export class OpenAICompatibleProvider implements LLMProvider {
 	private maxRetries: number;
 	private timeout: number;
 
-	constructor(config: ProviderConfig, opts: { model?: string; apiKey?: string; maxRetries?: number; timeout?: number }) {
+	constructor(
+		config: ProviderConfig,
+		opts: { model?: string; apiKey?: string; maxRetries?: number; timeout?: number },
+	) {
 		this.name = config.name;
 		this.baseUrl = config.baseUrl.replace(/\/$/, "");
 		this.apiKey = opts.apiKey || process.env[config.apiKeyEnvVar] || "";
@@ -324,9 +327,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 				// Rate limit — retry with backoff
 				if (response.status === 429 || response.status >= 500) {
 					const retryAfter = response.headers.get("retry-after");
-					const delay = retryAfter
-						? parseInt(retryAfter, 10) * 1000
-						: Math.min(1000 * Math.pow(2, attempt), this.timeout);
+					const delay = retryAfter ? parseInt(retryAfter, 10) * 1000 : Math.min(1000 * 2 ** attempt, this.timeout);
 
 					logger.warn("llm", `[${this.name}] ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1})`);
 					await new Promise((r) => setTimeout(r, delay));
@@ -341,7 +342,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 				lastError = err;
 
 				if (attempt < this.maxRetries) {
-					const delay = Math.min(1000 * Math.pow(2, attempt), this.timeout);
+					const delay = Math.min(1000 * 2 ** attempt, this.timeout);
 					logger.warn("llm", `[${this.name}] Request failed, retrying in ${delay}ms: ${err.message}`);
 					await new Promise((r) => setTimeout(r, delay));
 				}
@@ -355,7 +356,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 		const choice = data.choices?.[0];
 		const message = choice?.message;
 
-		let text = message?.content || "";
+		const text = message?.content || "";
 		const contentBlocks: MessageContent[] = [];
 
 		if (text) {

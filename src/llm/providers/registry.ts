@@ -21,11 +21,7 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		baseUrl: "https://api.anthropic.com",
 		apiKeyEnvVar: "ANTHROPIC_API_KEY",
 		defaultModel: "claude-sonnet-4-5-20250929",
-		models: [
-			"claude-opus-4-6",
-			"claude-sonnet-4-5-20250929",
-			"claude-haiku-4-5-20251001",
-		],
+		models: ["claude-opus-4-6", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001"],
 	},
 
 	// ─── OpenRouter ──────────────────────────────────────
@@ -166,10 +162,7 @@ export function registerProvider(config: ProviderConfig): void {
  * Resolve a provider by name, with optional overrides.
  * Also supports passing a custom baseUrl directly (creates an ad-hoc openai-compatible provider).
  */
-export function resolveProvider(
-	name: string,
-	overrides?: { baseUrl?: string; apiKey?: string },
-): ProviderConfig {
+export function resolveProvider(name: string, overrides?: { baseUrl?: string; apiKey?: string }): ProviderConfig {
 	const config = getProvider(name);
 
 	if (config) {

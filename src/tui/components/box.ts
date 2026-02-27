@@ -65,9 +65,7 @@ export class BoxComponent implements Component {
 			const titleText = ` ${this.options.title} `;
 			const titleLen = titleText.length;
 			const remainingWidth = Math.max(0, innerWidth - titleLen);
-			lines.push(
-				bs(b.tl) + bs(b.h) + ts(titleText) + bs(b.h.repeat(Math.max(0, remainingWidth - 1))) + bs(b.tr),
-			);
+			lines.push(bs(b.tl) + bs(b.h) + ts(titleText) + bs(b.h.repeat(Math.max(0, remainingWidth - 1))) + bs(b.tr));
 		} else {
 			lines.push(bs(b.tl) + bs(b.h.repeat(innerWidth)) + bs(b.tr));
 		}

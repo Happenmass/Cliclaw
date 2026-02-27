@@ -1,5 +1,5 @@
-import { loadConfig } from "../../utils/config.js";
 import { resolveProvider } from "../../llm/providers/registry.js";
+import { loadConfig } from "../../utils/config.js";
 import type { CheckResult } from "../types.js";
 
 const CHECK_NAME = "api-key";

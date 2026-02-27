@@ -105,10 +105,7 @@ export class MemoryStore {
 			this.vecAvailable = this.loadVecExtension(config.vectorExtensionPath);
 		}
 
-		logger.info(
-			"memory-store",
-			`Initialized: vec=${this.vecAvailable}, fts=${this.ftsAvailable}`,
-		);
+		logger.info("memory-store", `Initialized: vec=${this.vecAvailable}, fts=${this.ftsAvailable}`);
 	}
 
 	// ─── Public Accessors ─────────────────────────────────
@@ -164,9 +161,7 @@ export class MemoryStore {
 	// ─── File Tracking ────────────────────────────────────
 
 	getTrackedFile(path: string): { hash: string } | undefined {
-		return this.db
-			.prepare("SELECT hash FROM files WHERE path = ?")
-			.get(path) as { hash: string } | undefined;
+		return this.db.prepare("SELECT hash FROM files WHERE path = ?").get(path) as { hash: string } | undefined;
 	}
 
 	upsertFile(entry: FileEntry): void {
@@ -179,9 +174,7 @@ export class MemoryStore {
 	}
 
 	getTrackedFilePaths(): string[] {
-		const rows = this.db
-			.prepare("SELECT path FROM files WHERE source = 'memory'")
-			.all() as { path: string }[];
+		const rows = this.db.prepare("SELECT path FROM files WHERE source = 'memory'").all() as { path: string }[];
 		return rows.map((r) => r.path);
 	}
 
@@ -194,9 +187,7 @@ export class MemoryStore {
 
 	removeChunksByPath(path: string): void {
 		// Get chunk IDs for vec cleanup
-		const chunkIds = this.db
-			.prepare("SELECT id FROM chunks WHERE path = ?")
-			.all(path) as { id: string }[];
+		const chunkIds = this.db.prepare("SELECT id FROM chunks WHERE path = ?").all(path) as { id: string }[];
 
 		this.db.prepare("DELETE FROM chunks WHERE path = ?").run(path);
 		this.db.prepare("DELETE FROM chunks_fts WHERE path = ?").run(path);
@@ -266,12 +257,7 @@ export class MemoryStore {
 
 	// ─── Embedding Cache ──────────────────────────────────
 
-	loadCachedEmbeddings(
-		provider: string,
-		model: string,
-		providerKey: string,
-		hashes: string[],
-	): Map<string, number[]> {
+	loadCachedEmbeddings(provider: string, model: string, providerKey: string, hashes: string[]): Map<string, number[]> {
 		const result = new Map<string, number[]>();
 		const batchSize = 400;
 

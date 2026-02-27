@@ -1,12 +1,12 @@
 import chalk from "chalk";
-import type { Component } from "./components/renderer.js";
-import { BoxComponent } from "./components/box.js";
-import { TextComponent } from "./components/text.js";
-import { SelectListComponent } from "./components/select-list.js";
-import type { SelectItem } from "./components/select-list.js";
-import { TextInputComponent } from "./components/text-input.js";
-import type { CLIPilotConfig } from "../utils/config.js";
 import { getAllProviders, getProvider } from "../llm/providers/registry.js";
+import type { CLIPilotConfig } from "../utils/config.js";
+import { BoxComponent } from "./components/box.js";
+import type { Component } from "./components/renderer.js";
+import type { SelectItem } from "./components/select-list.js";
+import { SelectListComponent } from "./components/select-list.js";
+import { TextComponent } from "./components/text.js";
+import { TextInputComponent } from "./components/text-input.js";
 
 type ConfigMode = "list" | "submenu" | "textinput";
 
@@ -86,7 +86,7 @@ export class ConfigView implements Component {
 			{
 				key: "apiKey",
 				label: "API Key",
-				getValue: () => this.config.llm.apiKey ? "********" : chalk.dim("(not set)"),
+				getValue: () => (this.config.llm.apiKey ? "********" : chalk.dim("(not set)")),
 				description: "Set the API key for the current provider",
 				type: "text",
 			},
@@ -322,9 +322,7 @@ export class ConfigView implements Component {
 		} else if (this.mode === "submenu" && this.selectList) {
 			contentLines.push("");
 			const submenuTitle =
-				this.menuItems[this.selectedIndex].key === "provider"
-					? "Select Provider:"
-					: "Select Model:";
+				this.menuItems[this.selectedIndex].key === "provider" ? "Select Provider:" : "Select Model:";
 			contentLines.push("  " + chalk.bold(submenuTitle));
 			contentLines.push("");
 			contentLines.push(...this.selectList.render(width - 4));

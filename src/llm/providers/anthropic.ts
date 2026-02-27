@@ -1,13 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../../utils/logger.js";
 import type {
-	LLMProvider,
+	CompletionOptions,
 	LLMMessage,
+	LLMProvider,
 	LLMResponse,
 	LLMStreamEvent,
-	CompletionOptions,
-	ProviderConfig,
 	MessageContent,
+	ProviderConfig,
 	ThinkingLevel,
 } from "../types.js";
 
@@ -31,7 +31,10 @@ export class AnthropicProvider implements LLMProvider {
 	private client: Anthropic;
 	private model: string;
 
-	constructor(config: ProviderConfig, opts: { model?: string; apiKey?: string; maxRetries?: number; timeout?: number }) {
+	constructor(
+		config: ProviderConfig,
+		opts: { model?: string; apiKey?: string; maxRetries?: number; timeout?: number },
+	) {
 		this.name = config.name;
 		this.model = opts.model || config.defaultModel;
 		this.client = new Anthropic({

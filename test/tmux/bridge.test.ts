@@ -1,24 +1,30 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterEach } from "vitest";
 import { TmuxBridge } from "../../src/tmux/bridge.js";
 
 const bridge = new TmuxBridge();
-const TEST_SESSION = "clipilot-test-" + Date.now();
+let sessionCounter = 0;
+
+function makeSessionName() {
+	return `clipilot-test-${Date.now()}-${sessionCounter++}`;
+}
 
 describe("TmuxBridge", () => {
 	let tmuxAvailable = false;
+	const activeSessions: string[] = [];
 
 	beforeAll(async () => {
 		tmuxAvailable = await bridge.checkInstalled();
 	});
 
-	afterAll(async () => {
-		if (tmuxAvailable) {
+	afterEach(async () => {
+		for (const name of activeSessions) {
 			try {
-				await bridge.killSession(TEST_SESSION);
+				await bridge.killSession(name);
 			} catch {
 				// Already killed or never created
 			}
 		}
+		activeSessions.length = 0;
 	});
 
 	it("should check if tmux is installed", async () => {
@@ -35,23 +41,29 @@ describe("TmuxBridge", () => {
 	it("should create and destroy sessions", async () => {
 		if (!tmuxAvailable) return;
 
-		await bridge.createSession(TEST_SESSION);
-		const has = await bridge.hasSession(TEST_SESSION);
+		const name = makeSessionName();
+		activeSessions.push(name);
+
+		await bridge.createSession(name);
+		const has = await bridge.hasSession(name);
 		expect(has).toBe(true);
 
 		const sessions = await bridge.listSessions();
-		expect(sessions.some((s) => s.name === TEST_SESSION)).toBe(true);
+		expect(sessions.some((s) => s.name === name)).toBe(true);
 
-		await bridge.killSession(TEST_SESSION);
-		const hasAfter = await bridge.hasSession(TEST_SESSION);
+		await bridge.killSession(name);
+		const hasAfter = await bridge.hasSession(name);
 		expect(hasAfter).toBe(false);
 	});
 
 	it("should send keys and capture pane", async () => {
 		if (!tmuxAvailable) return;
 
-		await bridge.createSession(TEST_SESSION);
-		const target = `${TEST_SESSION}:0.0`;
+		const name = makeSessionName();
+		activeSessions.push(name);
+
+		await bridge.createSession(name);
+		const target = `${name}:0.0`;
 
 		// Send a command
 		await bridge.sendKeys(target, "echo hello-clipilot-test", { literal: true });
@@ -65,8 +77,6 @@ describe("TmuxBridge", () => {
 		expect(capture.content).toContain("hello-clipilot-test");
 		expect(capture.lines.length).toBeGreaterThan(0);
 		expect(capture.timestamp).toBeGreaterThan(0);
-
-		await bridge.killSession(TEST_SESSION);
 	});
 
 	it("should build target strings correctly", () => {
@@ -78,23 +88,41 @@ describe("TmuxBridge", () => {
 	it("should list windows", async () => {
 		if (!tmuxAvailable) return;
 
-		await bridge.createSession(TEST_SESSION);
-		const windows = await bridge.listWindows(TEST_SESSION);
+		const name = makeSessionName();
+		activeSessions.push(name);
+
+		await bridge.createSession(name);
+		const windows = await bridge.listWindows(name);
 		expect(windows.length).toBeGreaterThanOrEqual(1);
 		expect(windows[0].index).toBe(0);
-
-		await bridge.killSession(TEST_SESSION);
 	});
 
 	it("should list panes", async () => {
 		if (!tmuxAvailable) return;
 
-		await bridge.createSession(TEST_SESSION);
-		const panes = await bridge.listPanes(TEST_SESSION);
+		const name = makeSessionName();
+		activeSessions.push(name);
+
+		await bridge.createSession(name);
+		const panes = await bridge.listPanes(name);
 		expect(panes.length).toBeGreaterThanOrEqual(1);
 		expect(panes[0].width).toBeGreaterThan(0);
 		expect(panes[0].height).toBeGreaterThan(0);
+	});
 
-		await bridge.killSession(TEST_SESSION);
+	it("should list only clipilot sessions", async () => {
+		if (!tmuxAvailable) return;
+
+		const clipilotName = makeSessionName(); // starts with "clipilot-test-"
+		const otherName = `other-session-${Date.now()}-${sessionCounter++}`;
+		activeSessions.push(clipilotName, otherName);
+
+		await bridge.createSession(clipilotName);
+		await bridge.createSession(otherName);
+
+		const clipilotSessions = await bridge.listClipilotSessions();
+		expect(clipilotSessions.some((s) => s.name === clipilotName)).toBe(true);
+		expect(clipilotSessions.every((s) => s.name.startsWith("clipilot-"))).toBe(true);
+		expect(clipilotSessions.some((s) => s.name === otherName)).toBe(false);
 	});
 });

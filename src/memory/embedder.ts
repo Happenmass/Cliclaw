@@ -249,16 +249,13 @@ export function createGeminiEmbeddingProvider(params: {
  * Create a local embedding provider using node-llama-cpp.
  * Model is lazily loaded on first use.
  */
-export function createLocalEmbeddingProvider(params: {
-	modelPath: string;
-	modelCacheDir?: string;
-}): EmbeddingProvider {
+export function createLocalEmbeddingProvider(params: { modelPath: string; modelCacheDir?: string }): EmbeddingProvider {
 	let embeddingContext: any = null;
 
 	async function ensureLoaded() {
 		if (embeddingContext) return;
 		try {
-			// @ts-ignore — node-llama-cpp is an optional peer dependency
+			// @ts-expect-error — node-llama-cpp is an optional peer dependency
 			const { getLlama } = await import("node-llama-cpp");
 			const llama = await getLlama();
 			const model = await llama.loadModel({ modelPath: params.modelPath });
@@ -398,9 +395,7 @@ export interface CreateEmbeddingProviderParams {
  * - Explicit provider name: Try the specified provider with optional fallback
  * - Returns null provider for FTS-only degradation when no providers available
  */
-export async function createEmbeddingProvider(
-	params: CreateEmbeddingProviderParams,
-): Promise<EmbeddingProviderResult> {
+export async function createEmbeddingProvider(params: CreateEmbeddingProviderParams): Promise<EmbeddingProviderResult> {
 	// Mode A: Auto detection
 	if (params.provider === "auto") {
 		for (const name of AUTO_DETECT_ORDER) {
@@ -435,10 +430,7 @@ export async function createEmbeddingProvider(
 			try {
 				const fallbackProvider = tryCreateProvider(params.fallback, params);
 				if (fallbackProvider) {
-					logger.info(
-						"embedding",
-						`Fell back from ${params.provider} to ${params.fallback}`,
-					);
+					logger.info("embedding", `Fell back from ${params.provider} to ${params.fallback}`);
 					return {
 						provider: fallbackProvider,
 						fallbackFrom: params.provider,
@@ -495,10 +487,7 @@ export function isAuthError(err: any): boolean {
  * Embed a batch of texts with exponential backoff retry.
  * Auth errors (401, 403) are NOT retried.
  */
-export async function embedBatchWithRetry(
-	provider: EmbeddingProvider,
-	texts: string[],
-): Promise<number[][]> {
+export async function embedBatchWithRetry(provider: EmbeddingProvider, texts: string[]): Promise<number[][]> {
 	let lastError: Error | null = null;
 
 	for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
@@ -526,10 +515,7 @@ export async function embedBatchWithRetry(
  * Split chunks that exceed the embedding model's input token limit.
  * Returns a new array where oversized chunks are split into sub-chunks.
  */
-export function enforceEmbeddingMaxInputTokens(
-	provider: EmbeddingProvider,
-	chunks: MemoryChunk[],
-): MemoryChunk[] {
+export function enforceEmbeddingMaxInputTokens(provider: EmbeddingProvider, chunks: MemoryChunk[]): MemoryChunk[] {
 	const limit = provider.maxInputTokens ?? KNOWN_LIMITS[`${provider.id}:${provider.model}`] ?? 8192;
 
 	const maxChars = limit * 4; // Approximate token→char conversion

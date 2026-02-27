@@ -60,10 +60,7 @@ export function isEvergreenCategory(category: MemoryCategory): boolean {
  * For known categories, returns the exact file path.
  * For "topic", returns all non-known, non-date paths.
  */
-export function buildCategoryPathFilter(
-	category: MemoryCategory,
-	trackedPaths: string[],
-): string[] {
+export function buildCategoryPathFilter(category: MemoryCategory, trackedPaths: string[]): string[] {
 	switch (category) {
 		case "core":
 			return ["memory/core.md"];

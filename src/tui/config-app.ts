@@ -1,6 +1,6 @@
+import { ensureConfigDir, loadConfig, saveConfig } from "../utils/config.js";
 import { TUIRenderer } from "./components/renderer.js";
 import { ConfigView } from "./config-view.js";
-import { ensureConfigDir, loadConfig, saveConfig } from "../utils/config.js";
 
 export async function runConfigTUI(): Promise<void> {
 	await ensureConfigDir();

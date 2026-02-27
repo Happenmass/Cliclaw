@@ -25,7 +25,10 @@ export interface SyncOptions {
  * - Delete old chunks and re-index if changed
  * - Remove index entries for deleted files
  */
-export async function syncMemoryFiles(store: MemoryStore, opts: SyncOptions = {}): Promise<{
+export async function syncMemoryFiles(
+	store: MemoryStore,
+	opts: SyncOptions = {},
+): Promise<{
 	added: number;
 	updated: number;
 	deleted: number;
@@ -112,11 +115,7 @@ export async function syncMemoryFiles(store: MemoryStore, opts: SyncOptions = {}
  * Returns an array of embeddings aligned with the input chunks.
  * If no provider is available, returns empty arrays.
  */
-async function embedChunks(
-	chunks: MemoryChunk[],
-	store: MemoryStore,
-	opts: SyncOptions,
-): Promise<number[][]> {
+async function embedChunks(chunks: MemoryChunk[], store: MemoryStore, opts: SyncOptions): Promise<number[][]> {
 	if (!opts.embeddingProvider || chunks.length === 0) {
 		return chunks.map(() => []);
 	}

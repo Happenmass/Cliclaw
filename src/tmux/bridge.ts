@@ -1,16 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type {
-	CaptureOptions,
-	CaptureResult,
-	SendKeysOptions,
-	TmuxPane,
-	TmuxSession,
-	TmuxWindow,
-} from "./types.js";
+import type { CaptureOptions, CaptureResult, SendKeysOptions, TmuxPane, TmuxSession, TmuxWindow } from "./types.js";
 import { TmuxError } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+
+const SEP = "|||";
 
 export class TmuxBridge {
 	private async exec(args: string[]): Promise<string> {
@@ -75,14 +70,14 @@ export class TmuxBridge {
 			const output = await this.exec([
 				"list-sessions",
 				"-F",
-				"#{session_name}\t#{session_windows}\t#{session_created}\t#{session_attached}",
+				`#{session_name}${SEP}#{session_windows}${SEP}#{session_created}${SEP}#{session_attached}`,
 			]);
 			return output
 				.trim()
 				.split("\n")
 				.filter((line) => line.length > 0)
 				.map((line) => {
-					const [name, windows, created, attached] = line.split("\t");
+					const [name, windows, created, attached] = line.split(SEP);
 					return {
 						name,
 						windows: parseInt(windows, 10),
@@ -93,6 +88,11 @@ export class TmuxBridge {
 		} catch {
 			return [];
 		}
+	}
+
+	async listClipilotSessions(): Promise<TmuxSession[]> {
+		const all = await this.listSessions();
+		return all.filter((s) => s.name.startsWith("clipilot-"));
 	}
 
 	// Window management
@@ -112,14 +112,14 @@ export class TmuxBridge {
 			"-t",
 			session,
 			"-F",
-			"#{window_index}\t#{window_name}\t#{window_active}\t#{window_panes}",
+			`#{window_index}${SEP}#{window_name}${SEP}#{window_active}${SEP}#{window_panes}`,
 		]);
 		return output
 			.trim()
 			.split("\n")
 			.filter((line) => line.length > 0)
 			.map((line) => {
-				const [index, name, active, panes] = line.split("\t");
+				const [index, name, active, panes] = line.split(SEP);
 				return {
 					index: parseInt(index, 10),
 					name,
@@ -153,14 +153,14 @@ export class TmuxBridge {
 			"-t",
 			target,
 			"-F",
-			"#{pane_id}\t#{pane_index}\t#{pane_width}\t#{pane_height}\t#{pane_active}\t#{pane_pid}\t#{pane_current_command}",
+			`#{pane_id}${SEP}#{pane_index}${SEP}#{pane_width}${SEP}#{pane_height}${SEP}#{pane_active}${SEP}#{pane_pid}${SEP}#{pane_current_command}`,
 		]);
 		return output
 			.trim()
 			.split("\n")
 			.filter((line) => line.length > 0)
 			.map((line) => {
-				const [id, index, width, height, active, pid, currentCommand] = line.split("\t");
+				const [id, index, width, height, active, pid, currentCommand] = line.split(SEP);
 				return {
 					id,
 					index: parseInt(index, 10),
