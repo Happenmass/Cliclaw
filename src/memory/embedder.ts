@@ -1,6 +1,9 @@
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { basename } from "node:path";
 import { logger } from "../utils/logger.js";
+
+const require = createRequire(import.meta.url);
 import { sha256 } from "./store.js";
 import type {
 	EmbeddingProvider,
@@ -255,10 +258,17 @@ export function createLocalEmbeddingProvider(params: { modelPath: string; modelC
 	async function ensureLoaded() {
 		if (embeddingContext) return;
 		try {
-			// @ts-expect-error — node-llama-cpp is an optional peer dependency
-			const { getLlama } = await import("node-llama-cpp");
+			const { getLlama, resolveModelFile } = await import("node-llama-cpp");
+
+			// Resolve model path — downloads from HuggingFace if hf: prefixed
+			let resolvedPath = params.modelPath;
+			if (params.modelPath.startsWith("hf:")) {
+				logger.info("embedding", `Downloading model: ${params.modelPath}`);
+				resolvedPath = await resolveModelFile(params.modelPath);
+			}
+
 			const llama = await getLlama();
-			const model = await llama.loadModel({ modelPath: params.modelPath });
+			const model = await llama.loadModel({ modelPath: resolvedPath });
 			embeddingContext = await model.createEmbeddingContext();
 		} catch (err: any) {
 			throw new Error(`Failed to load local embedding model: ${err.message}`);
@@ -296,7 +306,10 @@ export function createLocalEmbeddingProvider(params: { modelPath: string; modelC
 
 // ─── Factory ────────────────────────────────────────────
 
-/** Auto-detection order for embedding providers */
+/** Default HuggingFace model for local embedding when no model path is configured */
+const DEFAULT_HF_MODEL = "hf:gpustack/bce-embedding-base_v1-GGUF/bce-embedding-base_v1-Q8_0.gguf";
+
+/** Auto-detection order for embedding providers (local first, then remote) */
 const AUTO_DETECT_ORDER: Array<Exclude<EmbeddingProviderRequest, "auto">> = [
 	"local",
 	"openai",
@@ -306,11 +319,40 @@ const AUTO_DETECT_ORDER: Array<Exclude<EmbeddingProviderRequest, "auto">> = [
 ];
 
 /**
- * Check if a local model path should be used (exists as a file).
+ * Cached result for node-llama-cpp availability check.
+ * null = not yet checked, boolean = cached result.
  */
-function shouldUseLocalProvider(modelPath?: string): boolean {
+let _nodeLlamaCppAvailable: boolean | null = null;
+
+/**
+ * Check if node-llama-cpp is installed and resolvable.
+ */
+export function isNodeLlamaCppAvailable(): boolean {
+	if (_nodeLlamaCppAvailable !== null) return _nodeLlamaCppAvailable;
+	try {
+		require.resolve("node-llama-cpp");
+		_nodeLlamaCppAvailable = true;
+	} catch {
+		_nodeLlamaCppAvailable = false;
+	}
+	return _nodeLlamaCppAvailable;
+}
+
+/** @internal For testing only — override node-llama-cpp availability */
+export function _setNodeLlamaCppAvailable(available: boolean | null): void {
+	_nodeLlamaCppAvailable = available;
+}
+
+/**
+ * Check if a local model path should be used.
+ * Supports local file paths (must exist) and hf: prefixed paths (downloaded by node-llama-cpp).
+ * Returns false if node-llama-cpp is not installed.
+ */
+export function shouldUseLocalProvider(modelPath?: string): boolean {
 	if (!modelPath) return false;
-	if (modelPath.startsWith("hf:") || modelPath.startsWith("http")) return false;
+	if (!isNodeLlamaCppAvailable()) return false;
+	if (modelPath.startsWith("hf:")) return true;
+	if (modelPath.startsWith("http")) return false;
 	return existsSync(modelPath);
 }
 
@@ -326,9 +368,10 @@ function tryCreateProvider(
 	const model = config.model ?? DEFAULT_MODELS[name] ?? "text-embedding-3-small";
 
 	if (name === "local") {
-		if (!shouldUseLocalProvider(config.local?.modelPath)) return null;
+		const modelPath = config.local?.modelPath || DEFAULT_HF_MODEL;
+		if (!shouldUseLocalProvider(modelPath)) return null;
 		return createLocalEmbeddingProvider({
-			modelPath: config.local!.modelPath!,
+			modelPath,
 			modelCacheDir: config.local?.modelCacheDir,
 		});
 	}

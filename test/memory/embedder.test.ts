@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	_setNodeLlamaCppAvailable,
 	createEmbeddingProvider,
 	createGeminiEmbeddingProvider,
 	createRemoteEmbeddingProvider,
@@ -8,8 +9,41 @@ import {
 	fetchRemoteEmbeddingVectors,
 	isAuthError,
 	resolveRemoteEmbeddingClient,
+	shouldUseLocalProvider,
 } from "../../src/memory/embedder.js";
 import type { EmbeddingProvider, MemoryChunk } from "../../src/memory/types.js";
+
+describe("shouldUseLocalProvider", () => {
+	afterEach(() => {
+		_setNodeLlamaCppAvailable(null);
+	});
+
+	it("should return true for hf: prefixed paths when node-llama-cpp is available", () => {
+		_setNodeLlamaCppAvailable(true);
+		expect(shouldUseLocalProvider("hf:user/repo/file.gguf")).toBe(true);
+		expect(shouldUseLocalProvider("hf:CompendiumLabs/bge-small-en-v1.5-gguf/bge-small-en-v1.5-q8_0.gguf")).toBe(true);
+	});
+
+	it("should return false for hf: prefixed paths when node-llama-cpp is not available", () => {
+		_setNodeLlamaCppAvailable(false);
+		expect(shouldUseLocalProvider("hf:user/repo/file.gguf")).toBe(false);
+	});
+
+	it("should return false for http paths", () => {
+		expect(shouldUseLocalProvider("https://example.com/model.gguf")).toBe(false);
+		expect(shouldUseLocalProvider("http://example.com/model.gguf")).toBe(false);
+	});
+
+	it("should return false for undefined/empty", () => {
+		expect(shouldUseLocalProvider(undefined)).toBe(false);
+		expect(shouldUseLocalProvider("")).toBe(false);
+	});
+
+	it("should return false for non-existent local file paths", () => {
+		_setNodeLlamaCppAvailable(true);
+		expect(shouldUseLocalProvider("/nonexistent/path/model.gguf")).toBe(false);
+	});
+});
 
 describe("resolveRemoteEmbeddingClient", () => {
 	it("should use apiKey from config", () => {
@@ -131,6 +165,8 @@ describe("createEmbeddingProvider factory", () => {
 			savedEnv[key] = process.env[key];
 			delete process.env[key];
 		}
+		// Simulate node-llama-cpp being available for local provider tests
+		_setNodeLlamaCppAvailable(true);
 	});
 
 	afterEach(() => {
@@ -142,9 +178,21 @@ describe("createEmbeddingProvider factory", () => {
 				process.env[key] = value;
 			}
 		}
+		_setNodeLlamaCppAvailable(null);
+	});
+
+	it("auto mode should fallback to local provider when no API keys available", async () => {
+		const result = await createEmbeddingProvider({
+			provider: "auto",
+			fallback: "none",
+		});
+		// With default hf: model and node-llama-cpp available, local provider works
+		expect(result.provider).toBeDefined();
+		expect(result.provider!.id).toBe("local");
 	});
 
 	it("auto mode should return null when no providers available", async () => {
+		_setNodeLlamaCppAvailable(false);
 		const result = await createEmbeddingProvider({
 			provider: "auto",
 			fallback: "none",
@@ -153,24 +201,25 @@ describe("createEmbeddingProvider factory", () => {
 		expect(result.unavailableReason).toBeDefined();
 	});
 
-	it("auto mode should detect openai when OPENAI_API_KEY is set", async () => {
+	it("auto mode should prefer local over openai when both available", async () => {
 		process.env.OPENAI_API_KEY = "sk-test-auto";
 		const result = await createEmbeddingProvider({
 			provider: "auto",
 			fallback: "none",
 		});
 		expect(result.provider).toBeDefined();
-		expect(result.provider!.id).toBe("openai");
+		// local is first in auto-detect order
+		expect(result.provider!.id).toBe("local");
 	});
 
-	it("auto mode should detect gemini when GEMINI_API_KEY is set", async () => {
+	it("auto mode should prefer local over gemini when both available", async () => {
 		process.env.GEMINI_API_KEY = "gem-test";
 		const result = await createEmbeddingProvider({
 			provider: "auto",
 			fallback: "none",
 		});
 		expect(result.provider).toBeDefined();
-		expect(result.provider!.id).toBe("gemini");
+		expect(result.provider!.id).toBe("local");
 	});
 
 	it("explicit mode should return specified provider", async () => {
