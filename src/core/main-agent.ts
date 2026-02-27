@@ -233,6 +233,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private memoryStore: MemoryStore | null = null;
 	private embeddingProvider: EmbeddingProvider | null = null;
 	private skillRegistry: SkillRegistry | null = null;
+	private debug: boolean;
 	private searchConfig: HybridSearchConfig = {
 		enabled: true,
 		vectorWeight: 0.7,
@@ -253,6 +254,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		embeddingProvider?: EmbeddingProvider | null;
 		searchConfig?: Partial<HybridSearchConfig>;
 		skillRegistry?: SkillRegistry;
+		debug?: boolean;
 	}) {
 		super();
 		this.contextManager = opts.contextManager;
@@ -265,6 +267,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.memoryStore = opts.memoryStore ?? null;
 		this.embeddingProvider = opts.embeddingProvider ?? null;
 		this.skillRegistry = opts.skillRegistry ?? null;
+		this.debug = opts.debug ?? false;
 		if (opts.searchConfig) {
 			this.searchConfig = { ...this.searchConfig, ...opts.searchConfig };
 		}
@@ -410,6 +413,25 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					inputTokens: response.usage.inputTokens ?? 0,
 					outputTokens: response.usage.outputTokens ?? 0,
 				});
+			}
+
+			// Debug: log every LLM response
+			if (this.debug) {
+				for (const block of response.contentBlocks) {
+					if (block.type === "text") {
+						logger.info("main-agent:debug", `[LLM text] ${block.text}`);
+					} else if (block.type === "tool_call") {
+						logger.info("main-agent:debug", `[LLM tool_call] ${block.name}(${JSON.stringify(block.arguments)})`);
+					} else if (block.type === "thinking") {
+						logger.info("main-agent:debug", `[LLM thinking] ${block.thinking}`);
+					}
+				}
+				if (response.usage) {
+					logger.info(
+						"main-agent:debug",
+						`[LLM usage] input=${response.usage.inputTokens} output=${response.usage.outputTokens}`,
+					);
+				}
 			}
 
 			// Add assistant response to conversation
