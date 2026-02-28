@@ -223,6 +223,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 			type: "object",
 			properties: {
 				command: { type: "string", description: "The bash command to execute (read-only operations only)" },
+				summary: {
+					type: "string",
+					description:
+						"Very brief summary of the action for chat UI, max 20 chars (e.g., '查看目录结构', '搜索配置文件', 'Check deps')",
+				},
 				cwd: {
 					type: "string",
 					description:
@@ -233,7 +238,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 					description: "Timeout in milliseconds (default: 30000)",
 				},
 			},
-			required: ["command"],
+			required: ["command", "summary"],
 		},
 	},
 ];
@@ -255,6 +260,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private embeddingProvider: EmbeddingProvider | null = null;
 	private skillRegistry: SkillRegistry | null = null;
 	private debug: boolean;
+	private execCommandBroadcastCount = 0;
 	private searchConfig: HybridSearchConfig = {
 		enabled: true,
 		vectorWeight: 0.7,
@@ -458,6 +464,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	// ─── Tool Execution Loop (EXECUTING state) ─────────
 
 	private async executeToolLoop(initialToolCalls: ToolCallContent[]): Promise<void> {
+		this.execCommandBroadcastCount = 0;
 		let toolCalls = initialToolCalls;
 
 		while (true) {
@@ -846,9 +853,16 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 			case "exec_command": {
 				const command = args.command as string;
+				const execSummary = args.summary as string;
 				const cwd = (args.cwd as string | undefined) ?? this.sessionWorkingDir;
 				const timeout = (args.timeout as number | undefined) ?? 30000;
 				const MAX_OUTPUT = 10000;
+
+				// Throttled broadcast: emit tool_activity on 1st, 4th, 7th, ... call
+				this.execCommandBroadcastCount++;
+				if (this.execCommandBroadcastCount % 3 === 1) {
+					this.broadcaster.broadcast({ type: "tool_activity", summary: execSummary });
+				}
 
 				try {
 					const execFileAsync = promisify(execFile);

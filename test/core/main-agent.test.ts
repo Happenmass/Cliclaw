@@ -458,4 +458,82 @@ describe("MainAgent State Machine", () => {
 			expect(agent.state).toBe("idle");
 		});
 	});
+
+	describe("exec_command tool_activity broadcasting", () => {
+		it("should broadcast tool_activity on first exec_command call", async () => {
+			const agent = setupAgent([
+				toolCallResponse("exec_command", { command: "ls", summary: "查看目录" }),
+				textResponse("Done."),
+			]);
+
+			await agent.handleMessage("check files");
+
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({
+				type: "tool_activity",
+				summary: "查看目录",
+			});
+		});
+
+		it("should throttle: only broadcast 1st of 3 consecutive exec_command calls", async () => {
+			const agent = setupAgent([
+				// 3 consecutive exec_command tool calls in one LLM response won't happen,
+				// so we simulate 3 rounds: each round returns one exec_command
+				toolCallResponse("exec_command", { command: "echo a", summary: "查看目录" }, "tc1"),
+				toolCallResponse("exec_command", { command: "echo b", summary: "读取文件" }, "tc2"),
+				toolCallResponse("exec_command", { command: "echo c", summary: "搜索代码" }, "tc3"),
+				textResponse("All done."),
+			]);
+
+			await agent.handleMessage("investigate");
+
+			const toolActivityCalls = mockBroadcaster.broadcast.mock.calls.filter(
+				(c: any) => c[0].type === "tool_activity",
+			);
+
+			// Only the 1st call (count=1, 1%3===1) should broadcast
+			expect(toolActivityCalls).toHaveLength(1);
+			expect(toolActivityCalls[0][0].summary).toBe("查看目录");
+		});
+
+		it("should reset throttle counter on new executeToolLoop", async () => {
+			// First handleMessage: triggers exec_command (count resets to 0, then 1 → broadcasts)
+			const agent = setupAgent([
+				toolCallResponse("exec_command", { command: "ls", summary: "第一轮查看" }, "tc1"),
+				toolCallResponse("mark_complete", { summary: "Done" }, "tc2"),
+			]);
+
+			await agent.handleMessage("first task");
+
+			// Second handleMessage: new executeToolLoop, counter resets
+			// We need a new LLM to feed responses for second call
+			const secondResponses = [
+				toolCallResponse("exec_command", { command: "pwd", summary: "第二轮查看" }, "tc3"),
+				toolCallResponse("mark_complete", { summary: "Done again" }, "tc4"),
+			];
+			let secondCallCount = 0;
+			(agent as any).llmClient = {
+				stream: vi.fn().mockImplementation(() => {
+					const events = secondResponses[secondCallCount] ?? [];
+					secondCallCount++;
+					return (async function* () {
+						for (const event of events) {
+							yield event;
+						}
+					})();
+				}),
+				complete: vi.fn(),
+			};
+
+			await agent.handleMessage("second task");
+
+			const toolActivityCalls = mockBroadcaster.broadcast.mock.calls.filter(
+				(c: any) => c[0].type === "tool_activity",
+			);
+
+			// Both should have broadcast (each is the 1st in its own loop)
+			expect(toolActivityCalls).toHaveLength(2);
+			expect(toolActivityCalls[0][0].summary).toBe("第一轮查看");
+			expect(toolActivityCalls[1][0].summary).toBe("第二轮查看");
+		});
+	});
 });

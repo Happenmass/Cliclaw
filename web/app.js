@@ -127,6 +127,11 @@
 				scrollToBottom();
 				break;
 
+			case "tool_activity":
+				addMessageBubble("tool-activity", data.summary);
+				scrollToBottom();
+				break;
+
 			case "state":
 				agentState = data.state;
 				setConnectionStatus("connected");
