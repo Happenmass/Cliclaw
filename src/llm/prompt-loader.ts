@@ -1,6 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export type PromptName =
@@ -28,6 +28,7 @@ const DEFAULT_BUILTIN_DIR = join(__dirname, "..", "..", "prompts");
 
 export class PromptLoader {
 	private prompts: Map<string, string> = new Map();
+	private adapterCapabilities: Map<string, string> = new Map();
 	private globalContext: Record<string, string> = {};
 	private builtinDir: string;
 
@@ -64,6 +65,10 @@ export class PromptLoader {
 		return this.prompts.get(name) ?? "";
 	}
 
+	loadAdapterCapabilities(name: string): string {
+		return this.adapterCapabilities.get(name) ?? "";
+	}
+
 	private async loadFromDir(dir: string): Promise<void> {
 		for (const [name, fileName] of Object.entries(PROMPT_FILE_MAP)) {
 			try {
@@ -72,6 +77,20 @@ export class PromptLoader {
 			} catch {
 				// File doesn't exist — skip silently
 			}
+		}
+
+		// Scan adapters/ subdirectory
+		const adaptersDir = join(dir, "adapters");
+		try {
+			const entries = await readdir(adaptersDir);
+			for (const entry of entries) {
+				if (!entry.endsWith(".md")) continue;
+				const name = basename(entry, ".md");
+				const content = await readFile(join(adaptersDir, entry), "utf-8");
+				this.adapterCapabilities.set(name, content.trim());
+			}
+		} catch {
+			// adapters/ directory doesn't exist — skip silently
 		}
 	}
 

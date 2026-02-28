@@ -100,4 +100,49 @@ describe("PromptLoader", () => {
 
 		expect(loader.getRaw("planner")).toBe("");
 	});
+
+	describe("adapter capabilities", () => {
+		it("should load adapter capabilities from adapters/ subdirectory", async () => {
+			const adaptersDir = join(builtinDir, "adapters");
+			await mkdir(adaptersDir, { recursive: true });
+			await writeFile(join(adaptersDir, "claude-code.md"), "Claude Code capabilities");
+
+			const loader = new PromptLoader(builtinDir);
+			await loader.load(tempDir);
+
+			expect(loader.loadAdapterCapabilities("claude-code")).toBe("Claude Code capabilities");
+		});
+
+		it("should return empty string for unknown adapter", async () => {
+			const loader = new PromptLoader(builtinDir);
+			await loader.load(tempDir);
+
+			expect(loader.loadAdapterCapabilities("unknown-adapter")).toBe("");
+		});
+
+		it("should override builtin adapter capabilities with project-level", async () => {
+			// Builtin
+			const builtinAdaptersDir = join(builtinDir, "adapters");
+			await mkdir(builtinAdaptersDir, { recursive: true });
+			await writeFile(join(builtinAdaptersDir, "claude-code.md"), "Builtin capabilities");
+
+			// Project-level override
+			const projectAdaptersDir = join(tempDir, ".clipilot", "prompts", "adapters");
+			await mkdir(projectAdaptersDir, { recursive: true });
+			await writeFile(join(projectAdaptersDir, "claude-code.md"), "Project capabilities");
+
+			const loader = new PromptLoader(builtinDir);
+			await loader.load(tempDir);
+
+			expect(loader.loadAdapterCapabilities("claude-code")).toBe("Project capabilities");
+		});
+
+		it("should skip adapters/ if directory does not exist", async () => {
+			const loader = new PromptLoader(builtinDir);
+			await loader.load(tempDir);
+
+			// Should not throw, just return empty
+			expect(loader.loadAdapterCapabilities("claude-code")).toBe("");
+		});
+	});
 });
