@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>CLIPilot Chat</title>
+	<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+	<div id="app">
+		<header id="header">
+			<h1>CLIPilot</h1>
+			<div id="status-indicator">
+				<span id="status-dot"></span>
+				<span id="status-text">连接中...</span>
+			</div>
+		</header>
+
+		<main id="messages"></main>
+
+		<footer id="input-area">
+			<div id="input-wrapper">
+				<textarea id="input" rows="1" placeholder="输入消息或 /指令..." autofocus></textarea>
+				<button id="send-btn" title="发送">&#9654;</button>
+			</div>
+		</footer>
+	</div>
+
+	<script src="app.js"></script>
+</body>
+</html>
