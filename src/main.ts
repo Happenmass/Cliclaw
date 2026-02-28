@@ -2,7 +2,6 @@
 
 import { join } from "node:path";
 import chalk from "chalk";
-import type { AgentAdapter } from "./agents/adapter.js";
 import { ClaudeCodeAdapter } from "./agents/claude-code.js";
 import { parseCliArgs, printHelp, printVersion } from "./cli.js";
 import { ContextManager } from "./core/context-manager.js";
@@ -247,8 +246,11 @@ async function main(): Promise<void> {
 		workspaceDir: args.cwd,
 	});
 	const filteredSkills = filterSkills(discoveredSkills, { disabled: config.skills?.disabled }, args.cwd);
-	const baseCapabilities =
-		defaultAdapter.getBaseCapabilities?.() || "Direct code editing and file operations\nRunning terminal commands";
+	const capFile = defaultAdapter.getCapabilitiesFile?.();
+	const adapterCapabilities = capFile
+		? promptLoader.loadAdapterCapabilities(capFile.replace(/^adapters\//, "").replace(/\.md$/, ""))
+		: "";
+	const baseCapabilities = adapterCapabilities || "Direct code editing and file operations\nRunning terminal commands";
 	const capabilitiesSummary = buildCapabilitiesSummary(baseCapabilities, filteredSkills);
 	contextManager.updateModule("agent_capabilities", capabilitiesSummary);
 	const skillRegistry = new SkillRegistry(filteredSkills);

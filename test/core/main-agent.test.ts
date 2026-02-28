@@ -409,4 +409,53 @@ describe("MainAgent State Machine", () => {
 			expect(mockCtx.compress).toHaveBeenCalled();
 		});
 	});
+
+	describe("exit_agent tool", () => {
+		it("should call adapter.exitAgent and return content with session id", async () => {
+			const agent = setupAgent([
+				toolCallResponse("exit_agent", { summary: "Exiting to save session" }),
+				textResponse("Agent exited successfully."),
+			]);
+			agent.setPaneTarget("test:0.0");
+
+			// Add exitAgent to mock adapter
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({
+				content: "Resume this session with:\nclaude --resume abc-123",
+				sessionId: "abc-123",
+			});
+
+			await agent.handleMessage("exit agent");
+
+			expect(mockAdapter.exitAgent).toHaveBeenCalledWith(mockBridge, "test:0.0");
+			expect(agent.state).toBe("idle");
+		});
+
+		it("should return error when no active session", async () => {
+			const agent = setupAgent([
+				toolCallResponse("exit_agent", { summary: "Exiting" }),
+				textResponse("No session."),
+			]);
+			// Do NOT set paneTarget
+
+			await agent.handleMessage("exit agent");
+
+			// Should not crash, agent returns to idle via text response
+			expect(agent.state).toBe("idle");
+		});
+
+		it("should return error when adapter does not support exitAgent", async () => {
+			const agent = setupAgent([
+				toolCallResponse("exit_agent", { summary: "Exiting" }),
+				textResponse("Not supported."),
+			]);
+			agent.setPaneTarget("test:0.0");
+
+			// Ensure no exitAgent on adapter
+			delete mockAdapter.exitAgent;
+
+			await agent.handleMessage("exit agent");
+
+			expect(agent.state).toBe("idle");
+		});
+	});
 });

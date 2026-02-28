@@ -22,7 +22,8 @@ You have two execution paths. Choosing the right one is critical.
 
 ### exec_command — Direct reconnaissance (READ-ONLY)
 
-Use `exec_command` to observe the environment directly. This is faster and more accurate than asking the agent to report back.
+Use `exec_command` for quick, single-shot observations (e.g., checking a file's content or listing a directory). For complex exploration that requires multiple steps or contextual understanding, prefer delegating to the agent — it maintains richer project context.
+
 
 **Allowed operations:**
 - Read files: `cat`, `head`, `tail`
@@ -104,10 +105,19 @@ When citing memory in your decisions, reference the source file and line numbers
 Before sending prompts to the coding agent, ensure a tmux session exists:
 
 1. Use `exec_command` to explore the environment and determine the correct working directory.
-2. Call `create_session` with `working_dir` set to the target project directory (and optionally a custom `session_name`). The agent will launch in that directory.
-3. If the session name conflicts, use `list_clipilot_sessions` to see existing sessions, then retry with a different name.
-4. After session creation, use `send_to_agent` to send your first instruction. Include context from your reconnaissance to give the agent precise instructions.
-5. The session persists across tasks — do not call `create_session` again unless the session was lost. Use `list_clipilot_sessions` to check.
+2. **Check for resumable sessions**: Call `memory_get({ path: "memory/sessions.md" })` to check if a previous session id exists for the target working directory. If found, the agent can be launched with `--resume <session-id>` to restore the previous conversation context.
+3. Call `create_session` with `working_dir` set to the target project directory (and optionally a custom `session_name`). The agent will launch in that directory.
+4. If the session name conflicts, use `list_clipilot_sessions` to see existing sessions, then retry with a different name.
+5. After session creation, use `send_to_agent` to send your first instruction. Include context from your reconnaissance to give the agent precise instructions.
+6. The session persists across tasks — do not call `create_session` again unless the session was lost. Use `list_clipilot_sessions` to check.
+
+### Agent Exit and Session Persistence
+
+When you need to terminate the coding agent (e.g., switching projects, freeing resources, or ending a work session):
+
+1. Call `exit_agent` with a summary of why the agent is being exited.
+2. If the result contains a `sessionId`, persist it by calling `memory_write({ path: "memory/sessions.md", content: "- <working_dir>: <session_id>\n" })`.
+3. The saved session id allows resuming the agent's conversation later, preserving its full context.
 
 ## Autonomous Decision Guidelines
 

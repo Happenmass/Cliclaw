@@ -91,7 +91,8 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	},
 	{
 		name: "mark_failed",
-		description: "Mark the current task as failed and return to idle state. Use when the task cannot be accomplished.",
+		description:
+			"Mark the current task as failed and return to idle state. Use when the task cannot be accomplished.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -184,8 +185,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 				},
 				working_dir: {
 					type: "string",
-					description:
-						"Working directory for the agent. Defaults to process.cwd() if omitted.",
+					description: "Working directory for the agent. Defaults to process.cwd() if omitted.",
 				},
 			},
 		},
@@ -197,6 +197,22 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 		parameters: {
 			type: "object",
 			properties: {},
+		},
+	},
+	{
+		name: "exit_agent",
+		description:
+			"Exit the current coding agent process. Returns the captured tmux output and a session id (if available) that can be used to resume the agent later with --resume. Use this when you need to terminate the agent cleanly.",
+		parameters: {
+			type: "object",
+			properties: {
+				summary: {
+					type: "string",
+					description:
+						"A brief human-readable summary of why the agent is being exited (e.g., 'Exiting agent to save session for later')",
+				},
+			},
+			required: ["summary"],
 		},
 	},
 	{
@@ -806,6 +822,26 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				} catch (err: any) {
 					return { output: `Error listing sessions: ${err.message}`, terminal: false };
 				}
+			}
+
+			case "exit_agent": {
+				if (!this.paneTarget) {
+					return { output: "Error: No active session.", terminal: false };
+				}
+				const exitSummary = args.summary as string;
+				this.broadcaster.broadcast({ type: "agent_update", summary: exitSummary });
+
+				if (!this.adapter.exitAgent) {
+					return { output: "Error: Current adapter does not support exitAgent.", terminal: false };
+				}
+
+				const exitResult = await this.adapter.exitAgent(this.bridge, this.paneTarget);
+				const parts = [`[Agent exited]\n${exitResult.content}`];
+				if (exitResult.sessionId) {
+					parts.push(`\nSession ID: ${exitResult.sessionId}`);
+					parts.push(`Working directory: ${this.sessionWorkingDir}`);
+				}
+				return { output: parts.join("\n"), terminal: false };
 			}
 
 			case "exec_command": {
