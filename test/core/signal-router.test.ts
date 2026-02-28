@@ -120,32 +120,23 @@ describe("SignalRouter", () => {
 	});
 
 	describe("execution control", () => {
-		it("should track pause state", () => {
-			expect(router.isPaused()).toBe(false);
-			router.pause();
-			expect(router.isPaused()).toBe(true);
+		it("should track stop requested state", () => {
+			expect(router.isStopRequested()).toBe(false);
+			router.stop();
+			expect(router.isStopRequested()).toBe(true);
 			router.resume();
-			expect(router.isPaused()).toBe(false);
+			expect(router.isStopRequested()).toBe(false);
 		});
 
-		it("should track abort state", () => {
-			expect(router.isAborted()).toBe(false);
-			router.abort();
-			expect(router.isAborted()).toBe(true);
-		});
-
-		it("should emit log events on pause/resume/abort", () => {
+		it("should emit log events on stop/resume", () => {
 			const logSpy = vi.fn();
 			router.on("log", logSpy);
 
-			router.pause();
-			expect(logSpy).toHaveBeenCalledWith("Execution paused");
+			router.stop();
+			expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Stop requested"));
 
 			router.resume();
 			expect(logSpy).toHaveBeenCalledWith("Execution resumed");
-
-			router.abort();
-			expect(logSpy).toHaveBeenCalledWith("Execution aborted");
 		});
 	});
 

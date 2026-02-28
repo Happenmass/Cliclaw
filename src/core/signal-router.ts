@@ -36,9 +36,8 @@ export class SignalRouter extends EventEmitter<SignalRouterEvents> {
 	private signalHandler: SignalHandler | null = null;
 	private unsubscribe: (() => void) | null = null;
 
-	// Execution control
-	private _paused = false;
-	private _aborted = false;
+	// Execution control — stop/resume the EXECUTING self-loop
+	private _stopRequested = false;
 
 	constructor(stateDetector: StateDetector, _bridge: TmuxBridge, _contextManager: ContextManager) {
 		super();
@@ -47,30 +46,30 @@ export class SignalRouter extends EventEmitter<SignalRouterEvents> {
 
 	// ─── Execution control ───────────────────────────────
 
-	pause(): void {
-		this._paused = true;
-		logger.info("signal-router", "Paused");
-		this.emit("log", "Execution paused");
+	/**
+	 * Request stop: sets stopRequested flag.
+	 * The EXECUTING self-loop will check this after the current tool round completes.
+	 */
+	stop(): void {
+		this._stopRequested = true;
+		logger.info("signal-router", "Stop requested");
+		this.emit("log", "Stop requested — will pause after current tool round");
 	}
 
+	/**
+	 * Clear stopRequested flag and allow the EXECUTING loop to continue.
+	 */
 	resume(): void {
-		this._paused = false;
+		this._stopRequested = false;
 		logger.info("signal-router", "Resumed");
 		this.emit("log", "Execution resumed");
 	}
 
-	abort(): void {
-		this._aborted = true;
-		logger.info("signal-router", "Aborted");
-		this.emit("log", "Execution aborted");
-	}
-
-	isPaused(): boolean {
-		return this._paused;
-	}
-
-	isAborted(): boolean {
-		return this._aborted;
+	/**
+	 * Check whether a stop has been requested.
+	 */
+	isStopRequested(): boolean {
+		return this._stopRequested;
 	}
 
 	// ─── Signal handling ─────────────────────────────────
