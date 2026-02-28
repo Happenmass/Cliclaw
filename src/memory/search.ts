@@ -25,6 +25,8 @@ export interface SearchOptions {
  *
  * When no embedding provider is available, falls back to FTS-only mode.
  * When FTS is also unavailable, returns empty results.
+ *
+ * Searches across all projects by default — results from any project are eligible.
  */
 export async function searchMemory(
 	store: MemoryStore,
@@ -44,7 +46,7 @@ export async function searchMemory(
 		}
 		const ftsResults = searchKeyword(store, query, candidates, opts.categoryPathFilter);
 		const merged: MergedResult[] = ftsResults.map((r) => ({
-			path: r.path,
+			path: `${r.project}/${r.path}`,
 			startLine: r.startLine,
 			endLine: r.endLine,
 			score: r.textScore, // Full weight to text score
@@ -78,6 +80,7 @@ export async function searchMemory(
 
 /**
  * Execute vector search using sqlite-vec KNN or brute-force fallback.
+ * Searches across all projects.
  */
 export function searchVector(
 	store: MemoryStore,
@@ -87,9 +90,10 @@ export function searchVector(
 	categoryPathFilter?: string[],
 ): HybridVectorResult[] {
 	const db = store.getDb();
+	const vecTableName = store.getVecTableName();
 
-	if (store.isVecAvailable()) {
-		return searchVectorKNN(db, queryVec, model, limit, categoryPathFilter);
+	if (store.isVecAvailable() && vecTableName) {
+		return searchVectorKNN(db, queryVec, model, limit, vecTableName, categoryPathFilter);
 	}
 
 	// Brute-force fallback: load all embeddings, compute cosine similarity
@@ -101,6 +105,7 @@ function searchVectorKNN(
 	queryVec: number[],
 	model: string,
 	limit: number,
+	vecTableName: string,
 	categoryPathFilter?: string[],
 ): HybridVectorResult[] {
 	try {
@@ -108,12 +113,11 @@ function searchVectorKNN(
 		const vecBlob = vectorToBlob(queryVec);
 
 		let sql = `
-			SELECT c.id, c.path, c.start_line, c.end_line, c.text, c.source,
+			SELECT c.id, c.project, c.path, c.start_line, c.end_line, c.text, c.source,
 					 vec_distance_cosine(v.embedding, ?) AS dist
-			FROM chunks_vec v
+			FROM ${vecTableName} v
 			JOIN chunks c ON c.id = v.id
-			WHERE c.model = ?
-				AND c.source IN ('memory')`;
+			WHERE c.model = ?`;
 
 		const params: any[] = [vecBlob, model];
 
@@ -129,6 +133,7 @@ function searchVectorKNN(
 		const rows = db.prepare(sql).all(...params) as any[];
 		return rows.map((r) => ({
 			id: r.id,
+			project: r.project,
 			path: r.path,
 			startLine: r.start_line,
 			endLine: r.end_line,
@@ -149,8 +154,8 @@ function searchVectorBruteForce(
 	limit: number,
 	categoryPathFilter?: string[],
 ): HybridVectorResult[] {
-	let sql = `SELECT id, path, start_line, end_line, text, embedding, source
-		FROM chunks WHERE model = ? AND source IN ('memory')`;
+	let sql = `SELECT id, project, path, start_line, end_line, text, embedding, source
+		FROM chunks WHERE model = ?`;
 
 	const params: any[] = [model];
 
@@ -168,6 +173,7 @@ function searchVectorBruteForce(
 			if (embedding.length === 0) return null;
 			return {
 				id: r.id as string,
+				project: r.project as string,
 				path: r.path as string,
 				startLine: r.start_line as number,
 				endLine: r.end_line as number,
@@ -186,6 +192,7 @@ function searchVectorBruteForce(
 
 /**
  * Execute FTS5 keyword search on chunks_fts.
+ * Searches across all projects.
  */
 export function searchKeyword(
 	store: MemoryStore,
@@ -199,11 +206,10 @@ export function searchKeyword(
 	const db = store.getDb();
 
 	try {
-		let sql = `SELECT id, path, source, start_line, end_line, text,
+		let sql = `SELECT id, project, path, source, start_line, end_line, text,
 						 bm25(chunks_fts) AS rank
 					FROM chunks_fts
-					WHERE chunks_fts MATCH ?
-						AND source IN ('memory')`;
+					WHERE chunks_fts MATCH ?`;
 
 		const params: any[] = [ftsQuery];
 
@@ -220,6 +226,7 @@ export function searchKeyword(
 
 		return rows.map((r) => ({
 			id: r.id as string,
+			project: r.project as string,
 			path: r.path as string,
 			startLine: r.start_line as number,
 			endLine: r.end_line as number,
@@ -264,6 +271,7 @@ export function bm25RankToScore(rank: number): number {
 /**
  * Merge vector and keyword search results by chunk ID.
  * Chunks hit by both paths receive combined scores.
+ * Results include project in path as {project}/{path}.
  */
 export function mergeHybridResults(params: {
 	vector: HybridVectorResult[];
@@ -274,6 +282,7 @@ export function mergeHybridResults(params: {
 	const byId = new Map<
 		string,
 		{
+			project: string;
 			path: string;
 			startLine: number;
 			endLine: number;
@@ -287,6 +296,7 @@ export function mergeHybridResults(params: {
 	// Add vector results
 	for (const r of params.vector) {
 		byId.set(r.id, {
+			project: r.project,
 			path: r.path,
 			startLine: r.startLine,
 			endLine: r.endLine,
@@ -304,6 +314,7 @@ export function mergeHybridResults(params: {
 			existing.textScore = r.textScore;
 		} else {
 			byId.set(r.id, {
+				project: r.project,
 				path: r.path,
 				startLine: r.startLine,
 				endLine: r.endLine,
@@ -315,9 +326,9 @@ export function mergeHybridResults(params: {
 		}
 	}
 
-	// Calculate weighted scores
+	// Calculate weighted scores, path includes project prefix
 	return Array.from(byId.values()).map((entry) => ({
-		path: entry.path,
+		path: `${entry.project}/${entry.path}`,
 		startLine: entry.startLine,
 		endLine: entry.endLine,
 		score: params.vectorWeight * entry.vectorScore + params.textWeight * entry.textScore,
@@ -328,11 +339,13 @@ export function mergeHybridResults(params: {
 
 // ─── Temporal Decay ─────────────────────────────────────
 
-const DATE_PATTERN = /^memory\/(\d{4}-\d{2}-\d{2})\.md$/;
+const DATE_PATTERN = /^(?:[^/]+\/)?memory\/(\d{4}-\d{2}-\d{2})\.md$/;
 
 /**
  * Apply exponential temporal decay to search results.
- * Only date-named files (memory/YYYY-MM-DD.md) are decayed.
+ * Only date-named files are decayed. Supports both formats:
+ * - "memory/YYYY-MM-DD.md" (legacy)
+ * - "{project}/memory/YYYY-MM-DD.md" (new cross-project)
  * Evergreen category files are NOT decayed.
  */
 export function applyTemporalDecay(

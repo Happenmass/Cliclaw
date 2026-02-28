@@ -157,14 +157,29 @@ export async function getLogsDir(): Promise<string> {
 }
 
 /**
+ * Generate a deterministic project identifier.
+ * Format: {basename}-{first 6 chars of sha256(absolutePath)}
+ */
+export function getProjectId(projectDir: string): string {
+	const absPath = resolve(projectDir);
+	const name = basename(absPath).toLowerCase();
+	const hash = createHash("sha256").update(absPath).digest("hex").slice(0, 6);
+	return `${name}-${hash}`;
+}
+
+/**
  * Generate a deterministic project storage directory path.
  * Format: {basename}-{first 6 chars of sha256(absolutePath)}
  */
 export function getProjectStorageDir(projectDir: string): string {
-	const absPath = resolve(projectDir);
-	const name = basename(absPath).toLowerCase();
-	const hash = createHash("sha256").update(absPath).digest("hex").slice(0, 6);
-	return join(CONFIG_DIR, "projects", `${name}-${hash}`);
+	return join(CONFIG_DIR, "projects", getProjectId(projectDir));
+}
+
+/**
+ * Get the global SQLite database path.
+ */
+export function getGlobalDbPath(): string {
+	return join(CONFIG_DIR, "memory.sqlite");
 }
 
 /**

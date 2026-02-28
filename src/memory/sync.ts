@@ -63,6 +63,11 @@ export async function syncMemoryFiles(
 		// Embed chunks
 		const embeddings = await embedChunks(chunks, store, opts);
 
+		// Initialize vec table with correct dimensions on first embedding
+		if (opts.embeddingProvider && embeddings.length > 0 && embeddings[0].length > 0) {
+			store.initVecTable(opts.embeddingProvider.id, embeddings[0].length);
+		}
+
 		// Insert new chunks
 		const model = opts.embeddingProvider?.model ?? "none";
 		for (let i = 0; i < chunks.length; i++) {
