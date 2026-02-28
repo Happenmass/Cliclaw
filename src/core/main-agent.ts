@@ -260,6 +260,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private embeddingProvider: EmbeddingProvider | null = null;
 	private skillRegistry: SkillRegistry | null = null;
 	private debug: boolean;
+	private firstLLMCall = true;
 	private execCommandBroadcastCount = 0;
 	private searchConfig: HybridSearchConfig = {
 		enabled: true,
@@ -378,6 +379,22 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		}
 
 		const { system, messages } = this.contextManager.prepareForLLM();
+
+		// Log full prompt on first LLM call
+		if (this.firstLLMCall) {
+			this.firstLLMCall = false;
+			logger.info("main-agent:prompt", "═══ First LLM Call — Full Prompt ═══");
+			logger.info("main-agent:prompt", `[System Prompt]\n${system}`);
+			for (const msg of messages) {
+				const contentStr =
+					typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content, null, 2);
+				logger.info(
+					"main-agent:prompt",
+					`[Message role=${msg.role}${msg.toolCallId ? ` toolCallId=${msg.toolCallId}` : ""}]\n${contentStr}`,
+				);
+			}
+			logger.info("main-agent:prompt", "═══ End of First LLM Call Prompt ═══");
+		}
 
 		let textContent = "";
 		const toolCallAccumulator = new Map<number, { id: string; name: string; args: string }>();
