@@ -1,5 +1,12 @@
 import type { TmuxBridge } from "../tmux/bridge.js";
 
+export interface ExitAgentResult {
+	/** Captured tmux pane content after exit */
+	content: string;
+	/** Extracted session id for --resume, if available */
+	sessionId?: string;
+}
+
 export interface LaunchOptions {
 	workingDir: string;
 	sessionName: string;
@@ -59,6 +66,9 @@ export interface AgentAdapter {
 	/** Return the absolute path to this adapter's bundled skills directory */
 	getSkillsDir?(): string;
 
-	/** Return a text description of the adapter's base capabilities (non-skill) */
-	getBaseCapabilities?(): string;
+	/** Return the relative path to the adapter's capabilities file under prompts/ (e.g. "adapters/claude-code.md") */
+	getCapabilitiesFile?(): string;
+
+	/** Exit the agent process and return captured output with optional session id */
+	exitAgent?(bridge: TmuxBridge, paneTarget: string): Promise<ExitAgentResult>;
 }

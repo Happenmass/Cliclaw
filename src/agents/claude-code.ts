@@ -2,7 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import { logger } from "../utils/logger.js";
-import type { AgentAdapter, AgentCharacteristics, LaunchOptions } from "./adapter.js";
+import type { AgentAdapter, AgentCharacteristics, ExitAgentResult, LaunchOptions } from "./adapter.js";
 
 export class ClaudeCodeAdapter implements AgentAdapter {
 	readonly name = "claude-code";
@@ -128,8 +128,33 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 		return join(thisDir, "..", "agents", "claude-code-skills");
 	}
 
-	getBaseCapabilities(): string {
-		return "Direct code editing and file operations\nRunning terminal commands";
+	getCapabilitiesFile(): string {
+		return "adapters/claude-code.md";
+	}
+
+	async exitAgent(bridge: TmuxBridge, paneTarget: string): Promise<ExitAgentResult> {
+		logger.info("claude-code", "Exiting agent with double Ctrl+C");
+
+		// Double Ctrl+C with 20ms interval to ensure clean exit
+		await bridge.sendKeys(paneTarget, "C-c");
+		await sleep(20);
+		await bridge.sendKeys(paneTarget, "C-c");
+
+		// Wait for agent to fully exit and print session id
+		await sleep(1000);
+
+		const capture = await bridge.capturePane(paneTarget);
+		const content = capture.content;
+
+		// Extract session id from "claude --resume <uuid>" pattern
+		const match = content.match(/claude\s+--resume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/);
+		const sessionId = match?.[1];
+
+		if (sessionId) {
+			logger.info("claude-code", `Extracted session id: ${sessionId}`);
+		}
+
+		return { content, sessionId };
 	}
 
 	getCharacteristics(): AgentCharacteristics {

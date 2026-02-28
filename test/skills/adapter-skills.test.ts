@@ -12,10 +12,9 @@ describe("ClaudeCodeAdapter skill methods", () => {
 		expect(dir).toContain("claude-code-skills");
 	});
 
-	it("should return base capabilities text from getBaseCapabilities", () => {
-		const caps = adapter.getBaseCapabilities();
-		expect(caps).toContain("code editing");
-		expect(caps).toContain("terminal commands");
+	it("should return capabilities file path from getCapabilitiesFile", () => {
+		const capFile = adapter.getCapabilitiesFile();
+		expect(capFile).toBe("adapters/claude-code.md");
 	});
 
 	it("should have skill directories that actually exist", () => {
