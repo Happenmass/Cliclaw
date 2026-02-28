@@ -3,7 +3,6 @@ import type { CLIPilotConfig } from "../../../src/utils/config.js";
 
 const DEFAULT_CONFIG: CLIPilotConfig = {
 	defaultAgent: "claude-code",
-	autonomyLevel: "medium",
 	llm: {
 		provider: "anthropic",
 		model: "claude-sonnet-4-5-20250929",

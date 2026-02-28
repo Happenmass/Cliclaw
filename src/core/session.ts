@@ -11,7 +11,6 @@ export interface SessionData {
 	goal: string;
 	status: SessionStatus;
 	agentType: string;
-	autonomyLevel: string;
 	summary?: string;
 	logs: LogEntry[];
 	startedAt: number;
@@ -24,19 +23,17 @@ export class Session {
 	goal: string;
 	status: SessionStatus;
 	agentType: string;
-	autonomyLevel: string;
 	summary?: string;
 	logs: LogEntry[] = [];
 	startedAt: number;
 	updatedAt: number;
 	completedAt?: number;
 
-	constructor(goal: string, agentType: string, autonomyLevel: string) {
+	constructor(goal: string, agentType: string) {
 		this.id = randomUUID().split("-")[0];
 		this.goal = goal;
 		this.status = "executing";
 		this.agentType = agentType;
-		this.autonomyLevel = autonomyLevel;
 		this.startedAt = Date.now();
 		this.updatedAt = Date.now();
 	}
@@ -65,7 +62,6 @@ export class Session {
 			goal: this.goal,
 			status: this.status,
 			agentType: this.agentType,
-			autonomyLevel: this.autonomyLevel,
 			summary: this.summary,
 			logs: this.logs,
 			startedAt: this.startedAt,
@@ -83,7 +79,7 @@ export class Session {
 		const raw = await readFile(filePath, "utf-8");
 		const data: SessionData = JSON.parse(raw);
 
-		const session = new Session(data.goal, data.agentType, data.autonomyLevel);
+		const session = new Session(data.goal, data.agentType);
 		session.id = data.id;
 		session.status = data.status;
 		session.summary = data.summary;

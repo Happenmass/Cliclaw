@@ -206,7 +206,6 @@ describe("TextInputComponent", () => {
 describe("ConfigView", () => {
 	const testConfig: CLIPilotConfig = {
 		defaultAgent: "claude-code",
-		autonomyLevel: "medium",
 		llm: {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5-20250929",
@@ -229,7 +228,6 @@ describe("ConfigView", () => {
 		expect(text).toContain("Default Provider");
 		expect(text).toContain("Model");
 		expect(text).toContain("API Key");
-		expect(text).toContain("Autonomy Level");
 		expect(text).toContain("Default Agent");
 		expect(text).toContain("Base URL");
 	});
@@ -241,24 +239,7 @@ describe("ConfigView", () => {
 
 		expect(text).toContain("anthropic");
 		expect(text).toContain("claude-sonnet-4-5-20250929");
-		expect(text).toContain("medium");
 		expect(text).toContain("claude-code");
-	});
-
-	it("should cycle autonomy level on Enter", () => {
-		let savedConfig: CLIPilotConfig | null = null;
-		const view = new ConfigView(testConfig, {
-			onSave: (config) => { savedConfig = config; },
-		});
-
-		// Navigate to Autonomy Level (index 3)
-		view.handleInput("\x1b[B"); // Down
-		view.handleInput("\x1b[B"); // Down
-		view.handleInput("\x1b[B"); // Down
-		view.handleInput("\r"); // Enter to cycle
-
-		expect(savedConfig).not.toBeNull();
-		expect(savedConfig!.autonomyLevel).toBe("high");
 	});
 
 	it("should call onClose on Esc", () => {

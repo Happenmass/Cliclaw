@@ -18,8 +18,6 @@ interface ConfigMenuItem {
 	type: "submenu" | "cycle" | "text";
 }
 
-const AUTONOMY_LEVELS = ["low", "medium", "high", "full"];
-
 export interface ConfigViewOptions {
 	onSave?: (config: CLIPilotConfig) => void;
 	onClose?: () => void;
@@ -89,13 +87,6 @@ export class ConfigView implements Component {
 				getValue: () => (this.config.llm.apiKey ? "********" : chalk.dim("(not set)")),
 				description: "Set the API key for the current provider",
 				type: "text",
-			},
-			{
-				key: "autonomy",
-				label: "Autonomy Level",
-				getValue: () => this.config.autonomyLevel,
-				description: "How much autonomy the agent has",
-				type: "cycle",
 			},
 			{
 				key: "agent",
@@ -239,10 +230,7 @@ export class ConfigView implements Component {
 	}
 
 	private cycleValue(key: string): void {
-		if (key === "autonomy") {
-			const idx = AUTONOMY_LEVELS.indexOf(this.config.autonomyLevel);
-			this.config.autonomyLevel = AUTONOMY_LEVELS[(idx + 1) % AUTONOMY_LEVELS.length];
-		} else if (key === "agent") {
+		if (key === "agent") {
 			// Currently only one agent
 			this.config.defaultAgent = "claude-code";
 		} else if (key === "debug") {

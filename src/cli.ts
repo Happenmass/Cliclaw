@@ -4,7 +4,6 @@ export interface CLIArgs {
 	goal: string | undefined;
 	isInit: boolean;
 	agent: string;
-	autonomy: "low" | "medium" | "high" | "full";
 	provider: string | undefined;
 	model: string | undefined;
 	baseUrl: string | undefined;
@@ -21,7 +20,6 @@ export function parseCliArgs(): CLIArgs {
 		allowPositionals: true,
 		options: {
 			agent: { type: "string", short: "a", default: "claude-code" },
-			autonomy: { type: "string", default: "medium" },
 			provider: { type: "string", short: "p" },
 			model: { type: "string", short: "m" },
 			"base-url": { type: "string" },
@@ -33,12 +31,6 @@ export function parseCliArgs(): CLIArgs {
 		},
 	});
 
-	const autonomy = values.autonomy as string;
-	if (!["low", "medium", "high", "full"].includes(autonomy)) {
-		console.error(`Invalid autonomy level: ${autonomy}. Must be one of: low, medium, high, full`);
-		process.exit(1);
-	}
-
 	// Handle subcommands
 	const isRemember = positionals[0] === "remember";
 	const isInit = positionals[0] === "init";
@@ -48,7 +40,6 @@ export function parseCliArgs(): CLIArgs {
 		goal: isRemember || isInit ? undefined : positionals[0],
 		isInit,
 		agent: values.agent as string,
-		autonomy: autonomy as CLIArgs["autonomy"],
 		provider: values.provider as string | undefined,
 		model: values.model as string | undefined,
 		baseUrl: values["base-url"] as string | undefined,
@@ -85,11 +76,6 @@ Options:
                                     deepseek, groq, together, xai, gemini, mistral, ollama
   -m, --model <id>        LLM model ID (default: provider's default)
   --base-url <url>        Custom API base URL (for self-hosted or custom endpoints)
-  --autonomy <level>      Autonomy level (default: medium)
-                          low:    confirm every step
-                          medium: confirm key decisions
-                          high:   fully automatic, notify on errors
-                          full:   fully autonomous with auto-retry
   --dry-run               Only plan, don't execute
   --list-providers        List all available LLM providers
   --cwd <path>            Working directory (default: current)

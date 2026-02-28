@@ -213,7 +213,6 @@ async function main(): Promise<void> {
 
 	console.log(chalk.dim("Agent:    ") + args.agent);
 	console.log(`${chalk.dim("Provider: ")}${llmProvider} (${llmClient.getModel()})`);
-	console.log(chalk.dim("Autonomy: ") + args.autonomy);
 	console.log(chalk.dim("Goal:     ") + goal);
 	console.log();
 
@@ -226,7 +225,7 @@ async function main(): Promise<void> {
 	agents.set("claude-code", defaultAdapter);
 
 	// Create session
-	const session = new Session(goal, args.agent, args.autonomy);
+	const session = new Session(goal, args.agent);
 
 	// Initialize ContextManager
 	const contextManager = new ContextManager({
