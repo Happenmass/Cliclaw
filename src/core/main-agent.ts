@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { AgentAdapter } from "../agents/adapter.js";
 import type { LLMClient } from "../llm/client.js";
-import type { ToolCallContent, ToolDefinition } from "../llm/types.js";
+import type { LLMMessage, LLMStreamEvent, MessageContent, ToolCallContent, ToolDefinition } from "../llm/types.js";
 import { buildCategoryPathFilter } from "../memory/category.js";
 import { searchMemory } from "../memory/search.js";
 import type { MemoryStore } from "../memory/store.js";
 import type { EmbeddingProvider, HybridSearchConfig, MemoryCategory } from "../memory/types.js";
+import type { ChatBroadcaster } from "../server/chat-broadcaster.js";
+import { MessageQueue } from "../server/message-queue.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
@@ -19,18 +21,10 @@ import type { Signal, SignalRouter } from "./signal-router.js";
 
 // ─── Types ──────────────────────────────────────────────
 
-export interface GoalResult {
-	success: boolean;
-	summary: string;
-	filesChanged?: string[];
-	errors?: string[];
-}
+export type AgentState = "idle" | "executing";
 
 export interface MainAgentEvents {
-	goal_start: [goal: string];
-	goal_complete: [result: GoalResult];
-	goal_failed: [error: string];
-	need_human: [reason: string];
+	state_change: [state: AgentState];
 	log: [message: string];
 }
 
@@ -45,8 +39,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 			type: "object",
 			properties: {
 				prompt: { type: "string", description: "The instruction prompt to send to the coding agent" },
+				summary: {
+					type: "string",
+					description:
+						"A brief human-readable summary of the current action for the chat interface (e.g., 'Asking agent to add JWT auth to auth/login.ts')",
+				},
 			},
-			required: ["prompt"],
+			required: ["prompt", "summary"],
 		},
 	},
 	{
@@ -57,8 +56,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 			type: "object",
 			properties: {
 				value: { type: "string", description: "The response value to send" },
+				summary: {
+					type: "string",
+					description:
+						"A brief human-readable summary of this response for the chat interface (e.g., 'Confirming dependency installation')",
+				},
 			},
-			required: ["value"],
+			required: ["value", "summary"],
 		},
 	},
 	{
@@ -76,7 +80,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "mark_complete",
 		description:
-			"Mark the current goal as successfully completed. Only call this when the overall goal has been fully achieved.",
+			"Mark the current task as successfully completed and return to idle state. Call this when you have finished executing the user's request.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -87,11 +91,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	},
 	{
 		name: "mark_failed",
-		description: "Mark the current goal as failed. Use when the goal cannot be accomplished.",
+		description: "Mark the current task as failed and return to idle state. Use when the task cannot be accomplished.",
 		parameters: {
 			type: "object",
 			properties: {
-				reason: { type: "string", description: "Why the goal failed" },
+				reason: { type: "string", description: "Why the task failed" },
 			},
 			required: ["reason"],
 		},
@@ -99,7 +103,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "escalate_to_human",
 		description:
-			"Escalate the current situation to a human operator. Use for dangerous operations or when you are uncertain.",
+			"Escalate the current situation to the human operator and return to idle state. Use for dangerous operations or when you are uncertain.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -176,12 +180,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 				session_name: {
 					type: "string",
 					description:
-						'Session name (will be prefixed with "clipilot-" if not already). If omitted, auto-generated from the goal.',
+						'Session name (will be prefixed with "clipilot-" if not already). If omitted, auto-generated.',
 				},
 				working_dir: {
 					type: "string",
 					description:
-						"Working directory for the agent. The tmux session and coding agent will be launched in this directory. Use exec_command to explore and determine the correct directory before creating a session. Defaults to process.cwd() if omitted.",
+						"Working directory for the agent. Defaults to process.cwd() if omitted.",
 				},
 			},
 		},
@@ -227,7 +231,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private adapter: AgentAdapter;
 	private bridge: TmuxBridge;
 	private stateDetector: StateDetector;
-	private goal: string;
+	private broadcaster: ChatBroadcaster;
+	private messageQueue = new MessageQueue();
 	private paneTarget: string | null = null;
 	private sessionWorkingDir: string = process.cwd();
 	private memoryStore: MemoryStore | null = null;
@@ -242,6 +247,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		temporalDecay: { enabled: true, halfLifeDays: 30 },
 	};
 
+	// ─── State Machine ─────────────────────────────────
+	state: AgentState = "idle";
+
 	constructor(opts: {
 		contextManager: ContextManager;
 		signalRouter: SignalRouter;
@@ -249,7 +257,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		adapter: AgentAdapter;
 		bridge: TmuxBridge;
 		stateDetector: StateDetector;
-		goal: string;
+		broadcaster: ChatBroadcaster;
 		memoryStore?: MemoryStore;
 		embeddingProvider?: EmbeddingProvider | null;
 		searchConfig?: Partial<HybridSearchConfig>;
@@ -263,7 +271,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.adapter = opts.adapter;
 		this.bridge = opts.bridge;
 		this.stateDetector = opts.stateDetector;
-		this.goal = opts.goal;
+		this.broadcaster = opts.broadcaster;
 		this.memoryStore = opts.memoryStore ?? null;
 		this.embeddingProvider = opts.embeddingProvider ?? null;
 		this.skillRegistry = opts.skillRegistry ?? null;
@@ -285,105 +293,61 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		return this.sessionWorkingDir;
 	}
 
-	async executeGoal(goal: string): Promise<GoalResult> {
-		this.goal = goal;
-		this.emit("goal_start", goal);
-		this.emit("log", `Starting goal: ${goal}`);
+	// ─── State Management ──────────────────────────────
 
-		// Inject goal into system prompt
-		this.contextManager.updateModule("goal", goal);
+	private setState(newState: AgentState): void {
+		if (this.state !== newState) {
+			this.state = newState;
+			this.broadcaster.broadcast({ type: "state", state: newState });
+			this.emit("state_change", newState);
+			logger.info("main-agent", `State: ${newState}`);
+		}
+	}
 
-		// Inject GOAL message into conversation
-		const goalMessage = `[GOAL] ${goal}\n\nYou are an autonomous agent. Analyze this goal, create a tmux session, send instructions to the coding agent, monitor progress, and adapt as needed. Call mark_complete when the entire goal is achieved.`;
-		this.contextManager.addMessage({ role: "user", content: goalMessage });
+	// ─── handleMessage — main entry point ──────────────
 
-		// Run the main execution loop
-		const result = await this.runMainLoop();
+	async handleMessage(content: string): Promise<void> {
+		if (this.state === "executing") {
+			// Queue message for injection between tool rounds
+			this.messageQueue.enqueue(content);
+			this.broadcaster.broadcast({
+				type: "system",
+				message: "消息已排队，将在当前操作完成后处理",
+			});
+			return;
+		}
 
-		// Emit result events
-		if (result.success) {
-			this.emit("goal_complete", result);
+		// IDLE state — process immediately
+		this.contextManager.addMessage({ role: "user", content });
+
+		// Stream LLM response
+		const { toolCalls, textContent } = await this.streamLLMResponse();
+
+		if (toolCalls.length > 0) {
+			// LLM wants to use tools — enter EXECUTING state
+			this.setState("executing");
+
+			// Add assistant message to conversation
+			const assistantBlocks = this.buildAssistantBlocks(textContent, toolCalls);
+			this.contextManager.addMessage({ role: "assistant", content: assistantBlocks });
+			this.broadcaster.broadcast({ type: "assistant_done" });
+
+			// Execute tools and enter self-loop
+			await this.executeToolLoop(toolCalls);
 		} else {
-			this.emit("goal_failed", result.summary);
-		}
-
-		// Forward events to SignalRouter for TUI consumption
-		if (result.success) {
-			this.signalRouter.emit("goal_complete", { success: result.success, summary: result.summary });
-		} else {
-			this.signalRouter.emit("goal_failed", result.summary);
-		}
-
-		return result;
-	}
-
-	private async runMainLoop(): Promise<GoalResult> {
-		while (true) {
-			// Check abort
-			if (this.signalRouter.isAborted()) {
-				return { success: false, summary: "Aborted by user" };
-			}
-
-			// Wait while paused
-			while (this.signalRouter.isPaused() && !this.signalRouter.isAborted()) {
-				await sleep(500);
-			}
-			if (this.signalRouter.isAborted()) {
-				return { success: false, summary: "Aborted by user" };
-			}
-
-			// Run tool-use loop
-			const result = await this.runToolUseLoop();
-			if (result) {
-				return result;
-			}
-
-			// No terminal tool called and no more tool calls.
-			// If we have a pane target, wait for signals from the agent.
-			if (this.paneTarget) {
-				const signalResult = await this.waitForSignal();
-				if (signalResult) {
-					return signalResult;
-				}
-				// Signal injected into conversation, continue main loop
-			}
-			// If no pane target and no tool calls, the LLM is thinking — loop continues
+			// Pure text response — stay IDLE
+			this.contextManager.addMessage({ role: "assistant", content: textContent });
+			this.broadcaster.broadcast({ type: "assistant_done" });
 		}
 	}
 
-	private async waitForSignal(): Promise<GoalResult | null> {
-		return new Promise<GoalResult | null>((resolve) => {
-			let resolved = false;
+	// ─── Streaming LLM Call ────────────────────────────
 
-			const handleSignal = async (signal: Signal) => {
-				if (resolved) return;
-
-				// Inject signal into conversation and let LLM decide
-				const content = this.formatSignal(signal);
-				this.contextManager.addMessage({ role: "user", content });
-				this.emit("log", `Signal: ${signal.analysis?.status ?? signal.type} — ${signal.analysis?.detail ?? ""}`);
-
-				// Stop monitoring temporarily to run tool-use loop
-				this.signalRouter.stopMonitoring();
-				resolved = true;
-
-				// Run tool-use loop with signal context
-				const result = await this.runToolUseLoop();
-				if (result) {
-					resolve(result);
-				} else {
-					// No terminal tool — resolve null to continue main loop
-					resolve(null);
-				}
-			};
-
-			this.signalRouter.onSignal(handleSignal);
-			this.signalRouter.startMonitoring(this.paneTarget!, this.goal);
-		});
-	}
-
-	private async runToolUseLoop(): Promise<GoalResult | null> {
-		// Flush-before-compress ordering (Layer 2 → Layer 3)
+	private async streamLLMResponse(): Promise<{
+		toolCalls: ToolCallContent[];
+		textContent: string;
+	}> {
+		// Flush-before-compress ordering
 		if (this.contextManager.shouldRunMemoryFlush()) {
 			await this.contextManager.runMemoryFlush();
 		}
@@ -391,63 +355,97 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			await this.contextManager.compress();
 		}
 
-		// Unbounded loop — exits only via terminal tool or no more tool calls
-		while (true) {
-			// Check abort before each LLM call
-			if (this.signalRouter.isAborted()) {
-				return { success: false, summary: "Aborted by user" };
-			}
+		const { system, messages } = this.contextManager.prepareForLLM();
 
-			// Use prepareForLLM() for Layer 1 context guard
-			const { system, messages } = this.contextManager.prepareForLLM();
+		let textContent = "";
+		const toolCallAccumulator = new Map<number, { id: string; name: string; args: string }>();
 
-			const response = await this.llmClient.complete(messages, {
-				systemPrompt: system,
-				tools: TOOL_DEFINITIONS,
-				temperature: 0.2,
-			});
+		const stream = this.llmClient.stream(messages, {
+			systemPrompt: system,
+			tools: TOOL_DEFINITIONS,
+			temperature: 0.2,
+		});
 
-			// Report actual token usage for hybrid counting
-			if (response.usage) {
-				this.contextManager.reportUsage({
-					inputTokens: response.usage.inputTokens ?? 0,
-					outputTokens: response.usage.outputTokens ?? 0,
-				});
-			}
+		let finalResponse: any = null;
 
-			// Debug: log every LLM response
-			if (this.debug) {
-				for (const block of response.contentBlocks) {
-					if (block.type === "text") {
-						logger.info("main-agent:debug", `[LLM text] ${block.text}`);
-					} else if (block.type === "tool_call") {
-						logger.info("main-agent:debug", `[LLM tool_call] ${block.name}(${JSON.stringify(block.arguments)})`);
-					} else if (block.type === "thinking") {
-						logger.info("main-agent:debug", `[LLM thinking] ${block.thinking}`);
+		for await (const event of stream) {
+			switch (event.type) {
+				case "text_delta":
+					textContent += event.delta;
+					this.broadcaster.broadcast({ type: "assistant_delta", delta: event.delta });
+					break;
+
+				case "tool_call_delta": {
+					let acc = toolCallAccumulator.get(event.index);
+					if (!acc) {
+						acc = { id: event.id ?? "", name: event.name ?? "", args: "" };
+						toolCallAccumulator.set(event.index, acc);
 					}
+					if (event.id) acc.id = event.id;
+					if (event.name) acc.name = event.name;
+					acc.args += event.argumentsDelta;
+					break;
 				}
-				if (response.usage) {
-					logger.info(
-						"main-agent:debug",
-						`[LLM usage] input=${response.usage.inputTokens} output=${response.usage.outputTokens}`,
-					);
-				}
-			}
 
-			// Add assistant response to conversation
-			this.contextManager.addMessage({
-				role: "assistant",
-				content: response.contentBlocks,
+				case "thinking_delta":
+					// Ignore thinking deltas in chat mode
+					break;
+
+				case "done":
+					finalResponse = event.response;
+					break;
+			}
+		}
+
+		// Report usage
+		if (finalResponse?.usage) {
+			this.contextManager.reportUsage({
+				inputTokens: finalResponse.usage.inputTokens ?? 0,
+				outputTokens: finalResponse.usage.outputTokens ?? 0,
 			});
+		}
 
-			// Extract tool calls
-			const toolCalls = response.contentBlocks.filter((b): b is ToolCallContent => b.type === "tool_call");
-
-			if (toolCalls.length === 0) {
-				// No tool calls — thinking complete, return null to let caller handle
-				return null;
+		// Build tool calls from accumulator
+		const toolCalls: ToolCallContent[] = [];
+		for (const [, acc] of toolCallAccumulator) {
+			let parsedArgs: Record<string, any> = {};
+			try {
+				parsedArgs = JSON.parse(acc.args);
+			} catch {
+				logger.warn("main-agent", `Failed to parse tool call args: ${acc.args}`);
 			}
+			toolCalls.push({
+				type: "tool_call",
+				id: acc.id,
+				name: acc.name,
+				arguments: parsedArgs,
+			});
+		}
 
+		// Debug logging
+		if (this.debug && finalResponse) {
+			if (textContent) logger.info("main-agent:debug", `[LLM text] ${textContent}`);
+			for (const tc of toolCalls) {
+				logger.info("main-agent:debug", `[LLM tool_call] ${tc.name}(${JSON.stringify(tc.arguments)})`);
+			}
+			if (finalResponse.usage) {
+				logger.info(
+					"main-agent:debug",
+					`[LLM usage] input=${finalResponse.usage.inputTokens} output=${finalResponse.usage.outputTokens}`,
+				);
+			}
+		}
+
+		return { toolCalls, textContent };
+	}
+
+	// ─── Tool Execution Loop (EXECUTING state) ─────────
+
+	private async executeToolLoop(initialToolCalls: ToolCallContent[]): Promise<void> {
+		let toolCalls = initialToolCalls;
+
+		while (true) {
+			// Execute all tool calls
 			for (const toolCall of toolCalls) {
 				const result = await this.executeTool(toolCall);
 
@@ -458,12 +456,38 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					toolCallId: toolCall.id,
 				});
 
+				// Terminal tool → back to IDLE
 				if (result.terminal) {
-					return result.goalResult!;
+					this.setState("idle");
+					return;
 				}
 			}
 
-			// Check context thresholds between iterations
+			// ─── Between-round checks ──────────────────
+
+			// 1. Check stopRequested
+			if (this.signalRouter.isStopRequested()) {
+				this.signalRouter.resume(); // Clear the flag
+				this.setState("idle");
+				this.broadcaster.broadcast({
+					type: "system",
+					message: "执行已停止",
+				});
+				return;
+			}
+
+			// 2. Drain MessageQueue
+			if (!this.messageQueue.isEmpty()) {
+				const queued = this.messageQueue.drain();
+				for (const msg of queued) {
+					this.contextManager.addMessage({
+						role: "user",
+						content: `[HUMAN] ${msg}`,
+					});
+				}
+			}
+
+			// 3. Check context thresholds
 			if (this.contextManager.shouldRunMemoryFlush()) {
 				await this.contextManager.runMemoryFlush();
 			}
@@ -471,14 +495,74 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				await this.contextManager.compress();
 			}
 
-			// Continue loop to let LLM see tool results
+			// 4. Next LLM call
+			const { toolCalls: nextToolCalls, textContent } = await this.streamLLMResponse();
+
+			if (nextToolCalls.length === 0) {
+				// No more tool calls — add text response and back to IDLE
+				if (textContent) {
+					this.contextManager.addMessage({ role: "assistant", content: textContent });
+				}
+				this.broadcaster.broadcast({ type: "assistant_done" });
+				this.setState("idle");
+				return;
+			}
+
+			// Has tool calls — add assistant message and continue loop
+			const assistantBlocks = this.buildAssistantBlocks(textContent, nextToolCalls);
+			this.contextManager.addMessage({ role: "assistant", content: assistantBlocks });
+			this.broadcaster.broadcast({ type: "assistant_done" });
+
+			toolCalls = nextToolCalls;
 		}
 	}
+
+	// ─── Resume (after /stop) ──────────────────────────
+
+	async handleResume(): Promise<void> {
+		if (this.state === "executing") return;
+
+		this.contextManager.addMessage({
+			role: "user",
+			content: "[RESUME] 继续执行之前的任务",
+		});
+
+		this.setState("executing");
+
+		const { toolCalls, textContent } = await this.streamLLMResponse();
+
+		if (toolCalls.length > 0) {
+			const assistantBlocks = this.buildAssistantBlocks(textContent, toolCalls);
+			this.contextManager.addMessage({ role: "assistant", content: assistantBlocks });
+			this.broadcaster.broadcast({ type: "assistant_done" });
+			await this.executeToolLoop(toolCalls);
+		} else {
+			if (textContent) {
+				this.contextManager.addMessage({ role: "assistant", content: textContent });
+			}
+			this.broadcaster.broadcast({ type: "assistant_done" });
+			this.setState("idle");
+		}
+	}
+
+	// ─── Helper: build assistant content blocks ────────
+
+	private buildAssistantBlocks(text: string, toolCalls: ToolCallContent[]): MessageContent[] {
+		const blocks: MessageContent[] = [];
+		if (text) {
+			blocks.push({ type: "text", text });
+		}
+		for (const tc of toolCalls) {
+			blocks.push(tc);
+		}
+		return blocks;
+	}
+
+	// ─── Tool Execution ────────────────────────────────
 
 	private async executeTool(toolCall: ToolCallContent): Promise<{
 		output: string;
 		terminal: boolean;
-		goalResult?: GoalResult;
 	}> {
 		const { name, arguments: args } = toolCall;
 		logger.info("main-agent", `Executing tool: ${name}(${JSON.stringify(args)})`);
@@ -489,12 +573,17 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					return { output: "Error: No active session. Call create_session first.", terminal: false };
 				}
 				const prompt = args.prompt as string;
+				const summary = args.summary as string;
+
+				// Broadcast agent update with summary
+				this.broadcaster.broadcast({ type: "agent_update", summary });
+
 				const sendPreHash = await this.stateDetector.captureHash(this.paneTarget);
 				await this.adapter.sendPrompt(this.bridge, this.paneTarget, prompt);
 				this.signalRouter.notifyPromptSent(prompt);
-				const sendResult = await this.stateDetector.waitForSettled(this.paneTarget, this.goal, {
+				const sendResult = await this.stateDetector.waitForSettled(this.paneTarget, "", {
 					preHash: sendPreHash,
-					isAborted: () => this.signalRouter.isAborted(),
+					isAborted: () => this.signalRouter.isStopRequested(),
 				});
 				const sendStatus = sendResult.timedOut ? "timeout" : sendResult.analysis.status;
 				return {
@@ -508,11 +597,16 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					return { output: "Error: No active session. Call create_session first.", terminal: false };
 				}
 				const value = args.value as string;
+				const summary = args.summary as string;
+
+				// Broadcast agent update with summary
+				this.broadcaster.broadcast({ type: "agent_update", summary });
+
 				const respondPreHash = await this.stateDetector.captureHash(this.paneTarget);
 				await this.adapter.sendResponse(this.bridge, this.paneTarget, value);
-				const respondResult = await this.stateDetector.waitForSettled(this.paneTarget, this.goal, {
+				const respondResult = await this.stateDetector.waitForSettled(this.paneTarget, "", {
 					preHash: respondPreHash,
-					isAborted: () => this.signalRouter.isAborted(),
+					isAborted: () => this.signalRouter.isStopRequested(),
 				});
 				const respondStatus = respondResult.timedOut ? "timeout" : respondResult.analysis.status;
 				return {
@@ -532,33 +626,23 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 			case "mark_complete": {
 				const summary = args.summary as string;
-				this.emit("log", `Goal completed: ${summary}`);
-				return {
-					output: `Goal marked as complete: ${summary}`,
-					terminal: true,
-					goalResult: { success: true, summary },
-				};
+				this.emit("log", `Task completed: ${summary}`);
+				this.broadcaster.broadcast({ type: "system", message: `任务完成: ${summary}` });
+				return { output: `Task marked as complete: ${summary}`, terminal: true };
 			}
 
 			case "mark_failed": {
 				const reason = args.reason as string;
-				this.emit("log", `Goal failed: ${reason}`);
-				return {
-					output: `Goal marked as failed: ${reason}`,
-					terminal: true,
-					goalResult: { success: false, summary: reason, errors: [reason] },
-				};
+				this.emit("log", `Task failed: ${reason}`);
+				this.broadcaster.broadcast({ type: "system", message: `任务失败: ${reason}` });
+				return { output: `Task marked as failed: ${reason}`, terminal: true };
 			}
 
 			case "escalate_to_human": {
 				const reason = args.reason as string;
-				this.emit("need_human", reason);
 				this.emit("log", `Escalated to human: ${reason}`);
-				return {
-					output: `Escalated to human: ${reason}`,
-					terminal: true,
-					goalResult: { success: false, summary: `Escalated: ${reason}` },
-				};
+				this.broadcaster.broadcast({ type: "system", message: `需要人工介入: ${reason}` });
+				return { output: `Escalated to human: ${reason}`, terminal: true };
 			}
 
 			case "memory_search": {
@@ -609,7 +693,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				const from = args.from as number | undefined;
 				const lineCount = args.lines as number | undefined;
 
-				// Strip project prefix if present (e.g. "clipilot-a3f2d1/memory/core.md" → "memory/core.md")
 				const slashIdx = memGetPath.indexOf("/");
 				if (slashIdx > 0 && !memGetPath.startsWith("memory/")) {
 					memGetPath = memGetPath.slice(slashIdx + 1);
@@ -621,7 +704,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					const lines = content.split("\n");
 
 					if (from !== undefined) {
-						const startIdx = Math.max(0, from - 1); // 1-indexed to 0-indexed
+						const startIdx = Math.max(0, from - 1);
 						const count = lineCount ?? lines.length - startIdx;
 						const slice = lines.slice(startIdx, startIdx + count);
 						return { output: slice.join("\n"), terminal: false };
@@ -645,10 +728,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 				try {
 					const result = await this.memoryStore.write({ path, content });
-					return {
-						output: `Written to ${result.path} successfully.`,
-						terminal: false,
-					};
+					return { output: `Written to ${result.path} successfully.`, terminal: false };
 				} catch (err: any) {
 					return { output: `Memory write error: ${err.message}`, terminal: false };
 				}
@@ -669,27 +749,20 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			case "create_session": {
 				let sessionName = args.session_name as string | undefined;
 				if (!sessionName) {
-					sessionName = generateSessionName(this.goal);
+					sessionName = generateSessionName("chat");
 				} else if (!sessionName.startsWith("clipilot-")) {
 					sessionName = `clipilot-${sessionName}`;
 				}
 
 				const workingDir = (args.working_dir as string | undefined) ?? process.cwd();
 
-				// Validate directory exists
 				try {
 					const dirStat = await stat(workingDir);
 					if (!dirStat.isDirectory()) {
-						return {
-							output: `Error: "${workingDir}" is not a directory.`,
-							terminal: false,
-						};
+						return { output: `Error: "${workingDir}" is not a directory.`, terminal: false };
 					}
 				} catch {
-					return {
-						output: `Error: Directory "${workingDir}" does not exist.`,
-						terminal: false,
-					};
+					return { output: `Error: Directory "${workingDir}" does not exist.`, terminal: false };
 				}
 
 				const exists = await this.bridge.hasSession(sessionName);
@@ -716,10 +789,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						terminal: false,
 					};
 				} catch (err: any) {
-					return {
-						output: `Failed to create session: ${err.message}`,
-						terminal: false,
-					};
+					return { output: `Failed to create session: ${err.message}`, terminal: false };
 				}
 			}
 
@@ -758,14 +828,12 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					}
 					return { output: output || "(no output)", terminal: false };
 				} catch (err: any) {
-					// Timeout
 					if (err.killed || err.signal === "SIGTERM") {
 						return {
 							output: `[exec_command timeout after ${timeout}ms]\nCommand: ${command}`,
 							terminal: false,
 						};
 					}
-					// Non-zero exit code
 					if (err.code !== undefined && typeof err.code === "number") {
 						let output = `[exit code: ${err.code}]\n${err.stderr || ""}${err.stdout || ""}`.trim();
 						if (output.length > MAX_OUTPUT) {
@@ -779,17 +847,13 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			}
 
 			default: {
-				// Check if this is a skill-registered tool
 				if (this.skillRegistry) {
 					const skillForTool = this.skillRegistry.getByToolName(name);
 					if (skillForTool) {
 						return { output: skillForTool.body, terminal: false };
 					}
 				}
-				return {
-					output: `Unknown tool: ${name}`,
-					terminal: false,
-				};
+				return { output: `Unknown tool: ${name}`, terminal: false };
 			}
 		}
 	}
@@ -812,15 +876,11 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	}
 }
 
-function generateSessionName(goal: string): string {
-	const slug = goal
+function generateSessionName(prefix: string): string {
+	const slug = prefix
 		.replace(/[^\w\u4e00-\u9fff]+/g, "-")
 		.replace(/^-+|-+$/g, "")
 		.slice(0, 30)
 		.replace(/-$/, "");
 	return `clipilot-${slug || "session"}`;
-}
-
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
 }

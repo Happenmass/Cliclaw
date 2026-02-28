@@ -3,24 +3,24 @@ import { ContextManager } from "../../src/core/context-manager.js";
 import { MainAgent } from "../../src/core/main-agent.js";
 import { SignalRouter } from "../../src/core/signal-router.js";
 import type { AgentAdapter, AgentCharacteristics } from "../../src/agents/adapter.js";
-import type { LLMClient } from "../../src/llm/client.js";
+import type { LLMStreamEvent } from "../../src/llm/types.js";
 import type { TmuxBridge } from "../../src/tmux/bridge.js";
 import type { StateDetector } from "../../src/tmux/state-detector.js";
 import type { PromptLoader } from "../../src/llm/prompt-loader.js";
 
 /**
- * Integration test: simulates the full Goal → executeGoal → GoalResult flow
- * through the MainAgent architecture.
+ * Integration test: simulates the full handleMessage → streaming LLM → tool execution flow
+ * through the MainAgent state machine.
  *
  * Components wired together:
  *   ContextManager (real) ← SignalRouter (real) ← MainAgent (real)
- *   LLMClient, Adapter, Bridge, StateDetector, PromptLoader (mocked)
+ *   LLMClient, Adapter, Bridge, StateDetector, PromptLoader, Broadcaster (mocked)
  */
 
 function createMockPromptLoader(): PromptLoader {
 	return {
 		getRaw: vi.fn().mockReturnValue(
-			"You are the Main Agent. Goal: {{goal}}\nHistory: {{compressed_history}}\nMemory: {{memory}}\nCapabilities: {{agent_capabilities}}",
+			"You are the Main Agent.\nHistory: {{compressed_history}}\nMemory: {{memory}}\nCapabilities: {{agent_capabilities}}",
 		),
 		resolve: vi.fn().mockReturnValue("compressor prompt"),
 		load: vi.fn().mockResolvedValue(undefined),
@@ -28,22 +28,12 @@ function createMockPromptLoader(): PromptLoader {
 	} as any;
 }
 
-function createMockLLMClient(responses: any[]) {
-	let callCount = 0;
+function createMockBroadcaster() {
 	return {
-		complete: vi.fn().mockImplementation(() => {
-			const response = responses[callCount] ?? {
-				content: "No more responses",
-				contentBlocks: [{ type: "text", text: "No more responses" }],
-				usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 },
-				stopReason: "end_turn",
-				model: "test",
-			};
-			callCount++;
-			return Promise.resolve(response);
-		}),
-		completeJson: vi.fn(),
-		getModel: vi.fn().mockReturnValue("test-model"),
+		broadcast: vi.fn(),
+		addClient: vi.fn(),
+		removeClient: vi.fn(),
+		getClientCount: vi.fn().mockReturnValue(0),
 	} as any;
 }
 
@@ -105,52 +95,81 @@ function createMockStateDetector() {
 	} as any;
 }
 
-/** Helper: create a tool call response */
-function toolCall(id: string, name: string, args: Record<string, any>) {
-	return {
-		content: "",
-		contentBlocks: [{ type: "tool_call", id, name, arguments: args }],
-		usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-		stopReason: "tool_use",
-		model: "test",
-	};
+// ─── Streaming helpers ──────────────────────────────
+
+function toolCallEvents(
+	toolName: string,
+	args: Record<string, any>,
+	toolCallId = "tc1",
+	text = "",
+): LLMStreamEvent[] {
+	const events: LLMStreamEvent[] = [];
+	if (text) {
+		events.push({ type: "text_delta", delta: text });
+	}
+	events.push({
+		type: "tool_call_delta",
+		index: 0,
+		id: toolCallId,
+		name: toolName,
+		argumentsDelta: JSON.stringify(args),
+	});
+	events.push({
+		type: "done",
+		response: {
+			content: text,
+			contentBlocks: [
+				...(text ? [{ type: "text" as const, text }] : []),
+				{ type: "tool_call" as const, id: toolCallId, name: toolName, arguments: args },
+			],
+			usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+			stopReason: "tool_use",
+			model: "test",
+		},
+	});
+	return events;
 }
 
-/** Helper: create an end_turn response (no tool calls) */
-function endTurn(text = "Waiting") {
+function createMockStreamingLLM(responses: LLMStreamEvent[][]) {
+	let callCount = 0;
 	return {
-		content: text,
-		contentBlocks: [{ type: "text", text }],
-		usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 },
-		stopReason: "end_turn",
-		model: "test",
-	};
+		stream: vi.fn().mockImplementation(() => {
+			const events = responses[callCount] ?? [];
+			callCount++;
+			return (async function* () {
+				for (const event of events) {
+					yield event;
+				}
+			})();
+		}),
+		complete: vi.fn(),
+		getModel: vi.fn().mockReturnValue("test-model"),
+	} as any;
 }
 
-describe("Integration: Goal-driven execution end-to-end", () => {
+describe("Integration: Chat mode end-to-end", () => {
 	let promptLoader: ReturnType<typeof createMockPromptLoader>;
 	let adapter: AgentAdapter;
 	let bridge: ReturnType<typeof createMockBridge>;
 	let stateDetector: ReturnType<typeof createMockStateDetector>;
+	let broadcaster: ReturnType<typeof createMockBroadcaster>;
 
 	beforeEach(() => {
 		promptLoader = createMockPromptLoader();
 		adapter = createMockAdapter();
 		bridge = createMockBridge();
 		stateDetector = createMockStateDetector();
+		broadcaster = createMockBroadcaster();
 	});
 
-	it("should complete a goal via create_session → send_to_agent (blocking) → mark_complete", async () => {
-		const llmClient = createMockLLMClient([
-			toolCall("tc0", "create_session", {}),
-			toolCall("tc1", "send_to_agent", { prompt: "Implement the feature" }),
-			// send_to_agent now blocks and returns content — LLM sees result and completes
-			toolCall("tc2", "mark_complete", { summary: "Feature implemented successfully" }),
+	it("should complete via create_session → send_to_agent → mark_complete", async () => {
+		const llmClient = createMockStreamingLLM([
+			toolCallEvents("create_session", {}, "tc0"),
+			toolCallEvents("send_to_agent", { prompt: "Implement the feature", summary: "Implementing feature" }, "tc1"),
+			toolCallEvents("mark_complete", { summary: "Feature implemented successfully" }, "tc2"),
 		]);
 
 		const contextManager = new ContextManager({ llmClient, promptLoader });
-		contextManager.updateModule("goal", "Build a feature");
-
 		const signalRouter = new SignalRouter(stateDetector as any, bridge, contextManager);
 
 		const mainAgent = new MainAgent({
@@ -160,33 +179,28 @@ describe("Integration: Goal-driven execution end-to-end", () => {
 			adapter,
 			bridge,
 			stateDetector: stateDetector as any,
-			goal: "Build a feature",
+			broadcaster,
 		});
 
-		const events: string[] = [];
-		mainAgent.on("goal_start", (g) => events.push(`start:${g}`));
-		mainAgent.on("goal_complete", (r) => events.push(`complete:${r.summary}`));
+		await mainAgent.handleMessage("Build a feature");
 
-		const result = await mainAgent.executeGoal("Build a feature");
-
-		expect(result.success).toBe(true);
-		expect(result.summary).toBe("Feature implemented successfully");
+		expect(mainAgent.state).toBe("idle");
 		expect(adapter.launch).toHaveBeenCalledTimes(1);
 		expect(adapter.sendPrompt).toHaveBeenCalledWith(bridge, "test-session:0.0", "Implement the feature");
-		// send_to_agent should call captureHash before sending and waitForSettled after
 		expect(stateDetector.captureHash).toHaveBeenCalled();
-		expect(stateDetector.waitForSettled).toHaveBeenCalledWith(
-			"test-session:0.0",
-			"Build a feature",
-			expect.objectContaining({ preHash: "mock-pre-hash" }),
+		expect(stateDetector.waitForSettled).toHaveBeenCalled();
+		expect(broadcaster.broadcast).toHaveBeenCalledWith({
+			type: "agent_update",
+			summary: "Implementing feature",
+		});
+		expect(broadcaster.broadcast).toHaveBeenCalledWith(
+			expect.objectContaining({ type: "system", message: expect.stringContaining("任务完成") }),
 		);
-		expect(events).toContain("start:Build a feature");
-		expect(events).toContain("complete:Feature implemented successfully");
 	});
 
-	it("should complete a goal via mark_complete tool (terminal tool, no signal needed)", async () => {
-		const llmClient = createMockLLMClient([
-			toolCall("tc1", "mark_complete", { summary: "Goal achieved directly" }),
+	it("should complete via mark_complete tool directly (no agent interaction)", async () => {
+		const llmClient = createMockStreamingLLM([
+			toolCallEvents("mark_complete", { summary: "Goal achieved directly" }, "tc1"),
 		]);
 
 		const contextManager = new ContextManager({ llmClient, promptLoader });
@@ -198,22 +212,23 @@ describe("Integration: Goal-driven execution end-to-end", () => {
 			adapter,
 			bridge,
 			stateDetector: stateDetector as any,
-			goal: "Quick goal",
+			broadcaster,
 		});
 
-		const result = await mainAgent.executeGoal("Quick goal");
+		await mainAgent.handleMessage("Quick goal");
 
-		expect(result.success).toBe(true);
-		expect(result.summary).toBe("Goal achieved directly");
+		expect(mainAgent.state).toBe("idle");
+		expect(broadcaster.broadcast).toHaveBeenCalledWith(
+			expect.objectContaining({ type: "system", message: expect.stringContaining("任务完成") }),
+		);
 	});
 
-	it("should handle multi-step tool use: create_session → fetch_more → send_to_agent (blocking) → complete", async () => {
-		const llmClient = createMockLLMClient([
-			toolCall("tc0", "create_session", {}),
-			toolCall("tc1", "fetch_more", { lines: 200 }),
-			toolCall("tc2", "send_to_agent", { prompt: "Fix the bug based on the error I see" }),
-			// send_to_agent blocks and returns content — LLM completes directly
-			toolCall("tc3", "mark_complete", { summary: "Bug fixed" }),
+	it("should handle multi-step tool use: create_session → fetch_more → send_to_agent → complete", async () => {
+		const llmClient = createMockStreamingLLM([
+			toolCallEvents("create_session", {}, "tc0"),
+			toolCallEvents("fetch_more", { lines: 200 }, "tc1"),
+			toolCallEvents("send_to_agent", { prompt: "Fix the bug", summary: "Fixing bug" }, "tc2"),
+			toolCallEvents("mark_complete", { summary: "Bug fixed" }, "tc3"),
 		]);
 
 		const contextManager = new ContextManager({ llmClient, promptLoader });
@@ -225,25 +240,20 @@ describe("Integration: Goal-driven execution end-to-end", () => {
 			adapter,
 			bridge,
 			stateDetector: stateDetector as any,
-			goal: "Fix bugs",
+			broadcaster,
 		});
 
-		const result = await mainAgent.executeGoal("Fix bugs");
+		await mainAgent.handleMessage("Fix bugs");
 
-		expect(result.success).toBe(true);
-		expect(result.summary).toBe("Bug fixed");
+		expect(mainAgent.state).toBe("idle");
 		expect(bridge.capturePane).toHaveBeenCalledWith("test-session:0.0", { startLine: -200 });
-		expect(adapter.sendPrompt).toHaveBeenCalledWith(
-			bridge,
-			"test-session:0.0",
-			"Fix the bug based on the error I see",
-		);
+		expect(adapter.sendPrompt).toHaveBeenCalledWith(bridge, "test-session:0.0", "Fix the bug");
 		expect(stateDetector.waitForSettled).toHaveBeenCalled();
 	});
 
 	it("should handle goal failure via mark_failed tool", async () => {
-		const llmClient = createMockLLMClient([
-			toolCall("tc1", "mark_failed", { reason: "Cannot resolve dependency" }),
+		const llmClient = createMockStreamingLLM([
+			toolCallEvents("mark_failed", { reason: "Cannot resolve dependency" }, "tc1"),
 		]);
 
 		const contextManager = new ContextManager({ llmClient, promptLoader });
@@ -255,22 +265,20 @@ describe("Integration: Goal-driven execution end-to-end", () => {
 			adapter,
 			bridge,
 			stateDetector: stateDetector as any,
-			goal: "Attempt something",
+			broadcaster,
 		});
 
-		const failSpy = vi.fn();
-		mainAgent.on("goal_failed", failSpy);
+		await mainAgent.handleMessage("Attempt something");
 
-		const result = await mainAgent.executeGoal("Attempt something");
-
-		expect(result.success).toBe(false);
-		expect(result.summary).toBe("Cannot resolve dependency");
-		expect(failSpy).toHaveBeenCalledWith("Cannot resolve dependency");
+		expect(mainAgent.state).toBe("idle");
+		expect(broadcaster.broadcast).toHaveBeenCalledWith(
+			expect.objectContaining({ type: "system", message: expect.stringContaining("任务失败") }),
+		);
 	});
 
 	it("should handle escalate_to_human as terminal tool", async () => {
-		const llmClient = createMockLLMClient([
-			toolCall("tc1", "escalate_to_human", { reason: "Need permission to delete files" }),
+		const llmClient = createMockStreamingLLM([
+			toolCallEvents("escalate_to_human", { reason: "Need permission to delete files" }, "tc1"),
 		]);
 
 		const contextManager = new ContextManager({ llmClient, promptLoader });
@@ -282,16 +290,14 @@ describe("Integration: Goal-driven execution end-to-end", () => {
 			adapter,
 			bridge,
 			stateDetector: stateDetector as any,
-			goal: "Cleanup project",
+			broadcaster,
 		});
 
-		const humanSpy = vi.fn();
-		mainAgent.on("need_human", humanSpy);
+		await mainAgent.handleMessage("Cleanup project");
 
-		const result = await mainAgent.executeGoal("Cleanup project");
-
-		expect(result.success).toBe(false);
-		expect(result.summary).toContain("Need permission to delete files");
-		expect(humanSpy).toHaveBeenCalledWith("Need permission to delete files");
+		expect(mainAgent.state).toBe("idle");
+		expect(broadcaster.broadcast).toHaveBeenCalledWith(
+			expect.objectContaining({ type: "system", message: expect.stringContaining("需要人工介入") }),
+		);
 	});
 });

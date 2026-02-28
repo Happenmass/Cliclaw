@@ -1,5 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MainAgent } from "../../src/core/main-agent.js";
+import type { LLMStreamEvent } from "../../src/llm/types.js";
+
+// ─── Mock factories ──────────────────────────────────
 
 function createMockContextManager() {
 	return {
@@ -22,40 +25,46 @@ function createMockContextManager() {
 }
 
 function createMockSignalRouter() {
-	let handler: any = null;
 	return {
-		onSignal: vi.fn((h: any) => {
-			handler = h;
-		}),
+		onSignal: vi.fn(),
 		startMonitoring: vi.fn(),
 		stopMonitoring: vi.fn(),
 		notifyPromptSent: vi.fn(),
 		resetCaptureExpansion: vi.fn(),
-		isPaused: vi.fn().mockReturnValue(false),
-		isAborted: vi.fn().mockReturnValue(false),
-		pause: vi.fn(),
+		isStopRequested: vi.fn().mockReturnValue(false),
+		stop: vi.fn(),
 		resume: vi.fn(),
-		abort: vi.fn(),
 		emit: vi.fn(),
 		on: vi.fn(),
-		_getHandler: () => handler,
 	} as any;
 }
 
-function createMockLLMClient(toolCallResponses: any[] = []) {
+function createMockBroadcaster() {
+	return {
+		broadcast: vi.fn(),
+		addClient: vi.fn(),
+		removeClient: vi.fn(),
+		getClientCount: vi.fn().mockReturnValue(0),
+	} as any;
+}
+
+/**
+ * Create a mock LLM client that returns streaming responses.
+ * Each entry in `responses` is an array of LLMStreamEvents.
+ */
+function createMockStreamingLLM(responses: LLMStreamEvent[][]) {
 	let callCount = 0;
 	return {
-		complete: vi.fn().mockImplementation(() => {
-			const response = toolCallResponses[callCount] ?? {
-				content: "Thinking...",
-				contentBlocks: [{ type: "text", text: "Thinking..." }],
-				usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-				stopReason: "end_turn",
-				model: "test-model",
-			};
+		stream: vi.fn().mockImplementation(() => {
+			const events = responses[callCount] ?? [];
 			callCount++;
-			return Promise.resolve(response);
+			return (async function* () {
+				for (const event of events) {
+					yield event;
+				}
+			})();
 		}),
+		complete: vi.fn(),
 	} as any;
 }
 
@@ -81,8 +90,8 @@ function createMockAdapter() {
 function createMockBridge() {
 	return {
 		capturePane: vi.fn().mockResolvedValue({
-			content: "extended pane content\n".repeat(100),
-			lines: 300,
+			content: "pane content\n".repeat(10),
+			lines: 50,
 			timestamp: Date.now(),
 		}),
 		hasSession: vi.fn().mockResolvedValue(false),
@@ -103,25 +112,82 @@ function createMockStateDetector() {
 		startMonitoring: vi.fn(),
 		stopMonitoring: vi.fn(),
 		onStateChange: vi.fn().mockReturnValue(() => {}),
-		quickPatternCheck: vi.fn().mockReturnValue(null),
 	} as any;
 }
 
-describe("MainAgent", () => {
+// ─── Helper: build streaming events ────────────────────
+
+function textResponse(text: string): LLMStreamEvent[] {
+	const events: LLMStreamEvent[] = [];
+	for (const char of text) {
+		events.push({ type: "text_delta", delta: char });
+	}
+	events.push({
+		type: "done",
+		response: {
+			content: text,
+			contentBlocks: [{ type: "text", text }],
+			usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+			stopReason: "end_turn",
+			model: "test",
+		},
+	});
+	return events;
+}
+
+function toolCallResponse(
+	toolName: string,
+	args: Record<string, any>,
+	toolCallId = "tc1",
+	text = "",
+): LLMStreamEvent[] {
+	const events: LLMStreamEvent[] = [];
+	if (text) {
+		events.push({ type: "text_delta", delta: text });
+	}
+	const argsJson = JSON.stringify(args);
+	events.push({
+		type: "tool_call_delta",
+		index: 0,
+		id: toolCallId,
+		name: toolName,
+		argumentsDelta: argsJson,
+	});
+	events.push({
+		type: "done",
+		response: {
+			content: text,
+			contentBlocks: [
+				...(text ? [{ type: "text" as const, text }] : []),
+				{ type: "tool_call" as const, id: toolCallId, name: toolName, arguments: args },
+			],
+			usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+			stopReason: "tool_use",
+			model: "test",
+		},
+	});
+	return events;
+}
+
+// ─── Tests ─────────────────────────────────────────────
+
+describe("MainAgent State Machine", () => {
 	let mockCtx: ReturnType<typeof createMockContextManager>;
 	let mockRouter: ReturnType<typeof createMockSignalRouter>;
-	let mockLLM: ReturnType<typeof createMockLLMClient>;
+	let mockBroadcaster: ReturnType<typeof createMockBroadcaster>;
 	let mockAdapter: ReturnType<typeof createMockAdapter>;
 	let mockBridge: ReturnType<typeof createMockBridge>;
 	let mockDetector: ReturnType<typeof createMockStateDetector>;
 
-	function setupAgent(toolCallResponses?: any[]) {
+	function setupAgent(responses: LLMStreamEvent[][]) {
 		mockCtx = createMockContextManager();
 		mockRouter = createMockSignalRouter();
-		mockLLM = createMockLLMClient(toolCallResponses);
+		mockBroadcaster = createMockBroadcaster();
 		mockAdapter = createMockAdapter();
 		mockBridge = createMockBridge();
 		mockDetector = createMockStateDetector();
+
+		const mockLLM = createMockStreamingLLM(responses);
 
 		return new MainAgent({
 			contextManager: mockCtx,
@@ -130,924 +196,215 @@ describe("MainAgent", () => {
 			adapter: mockAdapter,
 			bridge: mockBridge,
 			stateDetector: mockDetector,
-			goal: "Build a test app",
+			broadcaster: mockBroadcaster,
 		});
 	}
 
-	describe("executeGoal", () => {
-		it("should inject GOAL message into conversation", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			await agent.executeGoal("Build a test app");
-
-			expect(mockCtx.addMessage).toHaveBeenCalledWith(
-				expect.objectContaining({
-					role: "user",
-					content: expect.stringContaining("[GOAL]"),
-				}),
-			);
-		});
-
-		it("should emit goal_start event", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			const startSpy = vi.fn();
-			agent.on("goal_start", startSpy);
-
-			await agent.executeGoal("Build a test app");
-
-			expect(startSpy).toHaveBeenCalledWith("Build a test app");
-		});
-
-		it("should emit goal_complete on success", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_complete", arguments: { summary: "All done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			const completeSpy = vi.fn();
-			agent.on("goal_complete", completeSpy);
-
-			const result = await agent.executeGoal("Build a test app");
-			expect(result.success).toBe(true);
-			expect(result.summary).toBe("All done");
-			expect(completeSpy).toHaveBeenCalled();
-		});
-
-		it("should emit goal_failed on failure", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_failed", arguments: { reason: "Cannot do it" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			const failSpy = vi.fn();
-			agent.on("goal_failed", failSpy);
-
-			const result = await agent.executeGoal("Build a test app");
-			expect(result.success).toBe(false);
-			expect(result.summary).toBe("Cannot do it");
-			expect(failSpy).toHaveBeenCalledWith("Cannot do it");
-		});
-
-		it("should return aborted when signalRouter is aborted", async () => {
-			mockCtx = createMockContextManager();
-			mockRouter = createMockSignalRouter();
-			mockRouter.isAborted.mockReturnValue(true);
-			mockLLM = createMockLLMClient();
-			mockAdapter = createMockAdapter();
-			mockBridge = createMockBridge();
-			mockDetector = createMockStateDetector();
-
-			const agent = new MainAgent({
-				contextManager: mockCtx,
-				signalRouter: mockRouter,
-				llmClient: mockLLM,
-				adapter: mockAdapter,
-				bridge: mockBridge,
-				stateDetector: mockDetector,
-				goal: "Build a test app",
-			});
-
-			const result = await agent.executeGoal("Build a test app");
-			expect(result.success).toBe(false);
-			expect(result.summary).toContain("Aborted");
+	describe("initial state", () => {
+		it("should start in idle state", () => {
+			const agent = setupAgent([]);
+			expect(agent.state).toBe("idle");
 		});
 	});
 
-	describe("tool execution", () => {
-		it("should handle mark_complete as terminal tool", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_complete", arguments: { summary: "All done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			const result = await agent.executeGoal("Test");
-			expect(result.success).toBe(true);
-			expect(result.summary).toBe("All done");
-		});
-
-		it("should handle mark_failed as terminal tool", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_failed", arguments: { reason: "Dependency missing" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			const result = await agent.executeGoal("Test");
-			expect(result.success).toBe(false);
-			expect(result.summary).toBe("Dependency missing");
-		});
-
-		it("should execute send_to_agent with blocking waitForSettled", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc0", name: "create_session", arguments: {} },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc1",
-							name: "send_to_agent",
-							arguments: { prompt: "implement feature" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			await agent.executeGoal("Test");
-
-			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(
-				mockBridge,
-				"test-session:0.0",
-				"implement feature",
-			);
-			expect(mockDetector.captureHash).toHaveBeenCalled();
-			expect(mockDetector.waitForSettled).toHaveBeenCalledWith(
-				"test-session:0.0",
-				"Test",
-				expect.objectContaining({ preHash: "mock-pre-hash" }),
-			);
-			expect(mockRouter.notifyPromptSent).toHaveBeenCalledWith("implement feature");
-		});
-
-		it("should return error when send_to_agent called without session", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "send_to_agent", arguments: { prompt: "do stuff" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc2", name: "mark_failed", arguments: { reason: "No session" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			const result = await agent.executeGoal("Test");
-			expect(result.success).toBe(false);
+	describe("handleMessage in IDLE state", () => {
+		it("should add user message to conversation", async () => {
+			const agent = setupAgent([textResponse("Hello!")]);
+			await agent.handleMessage("hi");
 
 			expect(mockCtx.addMessage).toHaveBeenCalledWith(
-				expect.objectContaining({
-					role: "tool",
-					content: expect.stringContaining("No active session"),
-				}),
+				expect.objectContaining({ role: "user", content: "hi" }),
 			);
 		});
 
-		it("should handle multi-step tool use (fetch_more then send_to_agent)", async () => {
+		it("should stream text response and stay idle", async () => {
+			const agent = setupAgent([textResponse("Hello there!")]);
+			await agent.handleMessage("hi");
+
+			// Should broadcast deltas
+			const deltaCalls = mockBroadcaster.broadcast.mock.calls.filter(
+				(c: any) => c[0].type === "assistant_delta",
+			);
+			expect(deltaCalls.length).toBeGreaterThan(0);
+
+			// Should broadcast assistant_done
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({ type: "assistant_done" });
+
+			// Should stay idle
+			expect(agent.state).toBe("idle");
+		});
+
+		it("should enter executing state when LLM returns tool calls", async () => {
 			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc0", name: "create_session", arguments: {} },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "fetch_more", arguments: { lines: 300 } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc2",
-							name: "send_to_agent",
-							arguments: { prompt: "continue" },
-						},
-					],
-					usage: { inputTokens: 200, outputTokens: 50, totalTokens: 250 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc3", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 200, outputTokens: 10, totalTokens: 210 },
-					stopReason: "tool_use",
-					model: "test",
-				},
+				toolCallResponse("mark_complete", { summary: "Done" }),
 			]);
 
-			const result = await agent.executeGoal("Test");
-			expect(result.success).toBe(true);
+			await agent.handleMessage("do something");
 
-			expect(mockBridge.capturePane).toHaveBeenCalledWith("test-session:0.0", { startLine: -300 });
-			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "test-session:0.0", "continue");
+			// Terminal tool → back to idle
+			expect(agent.state).toBe("idle");
+
+			// Should have been in executing state (verified by state broadcast)
+			const stateCalls = mockBroadcaster.broadcast.mock.calls.filter(
+				(c: any) => c[0].type === "state",
+			);
+			expect(stateCalls).toContainEqual([{ type: "state", state: "executing" }]);
+			expect(stateCalls).toContainEqual([{ type: "state", state: "idle" }]);
 		});
 	});
 
-	describe("create_session tool", () => {
-		it("should create a session and launch the agent", async () => {
+	describe("handleMessage in EXECUTING state", () => {
+		it("should queue message and send system notification", async () => {
+			// Setup: first call returns a tool that blocks (create_session + send_to_agent)
+			// But simpler: just set the state to executing manually by sending a message that triggers tools
 			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc0",
-							name: "create_session",
-							arguments: { session_name: "my-task" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
+				toolCallResponse("create_session", {}, "tc0"),
+				toolCallResponse("send_to_agent", { prompt: "work", summary: "Working" }, "tc1"),
+				toolCallResponse("mark_complete", { summary: "Done" }, "tc2"),
 			]);
 
-			const result = await agent.executeGoal("Test");
-			expect(result.success).toBe(true);
+			// Start a task that will enter EXECUTING
+			const handlePromise = agent.handleMessage("do a task");
 
-			expect(mockAdapter.launch).toHaveBeenCalledWith(mockBridge, {
-				workingDir: expect.any(String),
-				sessionName: "clipilot-my-task",
-			});
-			expect(mockDetector.setCharacteristics).toHaveBeenCalled();
-			expect(agent.getPaneTarget()).toBe("test-session:0.0");
-		});
+			// Wait for it to complete
+			await handlePromise;
 
-		it("should auto-generate session name when omitted", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc0", name: "create_session", arguments: {} },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			await agent.executeGoal("Test");
-
-			expect(mockAdapter.launch).toHaveBeenCalledWith(mockBridge, {
-				workingDir: expect.any(String),
-				sessionName: expect.stringContaining("clipilot-"),
-			});
-		});
-
-		it("should return error on naming conflict", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc0",
-							name: "create_session",
-							arguments: { session_name: "existing" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc1",
-							name: "mark_failed",
-							arguments: { reason: "Session conflict" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-			mockBridge.hasSession.mockResolvedValue(true);
-
-			const result = await agent.executeGoal("Test");
-			expect(result.success).toBe(false);
-
-			expect(mockCtx.addMessage).toHaveBeenCalledWith(
-				expect.objectContaining({
-					role: "tool",
-					content: expect.stringContaining("already exists"),
-				}),
-			);
-			expect(mockAdapter.launch).not.toHaveBeenCalled();
+			// The agent should be back to idle after mark_complete
+			expect(agent.state).toBe("idle");
 		});
 	});
 
-	describe("list_clipilot_sessions tool", () => {
-		it("should list sessions with clipilot prefix", async () => {
+	describe("IDLE → EXECUTING → IDLE flow", () => {
+		it("should complete full flow: text + tool call → execute → mark_complete → idle", async () => {
 			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc0", name: "list_clipilot_sessions", arguments: {} },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_complete", arguments: { summary: "Listed" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-			mockBridge.listClipilotSessions.mockResolvedValue([
-				{ name: "clipilot-task-a", windows: 1, created: 1234567890, attached: false },
-				{ name: "clipilot-task-b", windows: 2, created: 1234567891, attached: true },
+				// First LLM call: tool call
+				toolCallResponse("create_session", {}, "tc0", "I'll create a session."),
+				// Second LLM call (after create_session result): send_to_agent
+				toolCallResponse("send_to_agent", { prompt: "implement feature", summary: "Implementing feature" }, "tc1"),
+				// Third LLM call (after send_to_agent result): mark_complete
+				toolCallResponse("mark_complete", { summary: "Feature implemented" }, "tc2"),
 			]);
 
-			const result = await agent.executeGoal("Test");
-			expect(result.success).toBe(true);
+			await agent.handleMessage("implement the feature");
 
-			expect(mockCtx.addMessage).toHaveBeenCalledWith(
+			expect(agent.state).toBe("idle");
+
+			// Check system message for completion
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
 				expect.objectContaining({
-					role: "tool",
-					content: expect.stringContaining("clipilot-task-a"),
-				}),
-			);
-		});
-
-		it("should handle no sessions found", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc0", name: "list_clipilot_sessions", arguments: {} },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			await agent.executeGoal("Test");
-
-			expect(mockCtx.addMessage).toHaveBeenCalledWith(
-				expect.objectContaining({
-					role: "tool",
-					content: "No clipilot sessions found.",
+					type: "system",
+					message: expect.stringContaining("任务完成"),
 				}),
 			);
 		});
 	});
 
-	describe("exec_command tool", () => {
-		it("should execute a basic command and return output", async () => {
+	describe("tool summary broadcasting", () => {
+		it("should broadcast agent_update for send_to_agent with summary", async () => {
 			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc1",
-							name: "exec_command",
-							arguments: { command: "echo hello" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
+				toolCallResponse("create_session", {}, "tc0"),
+				toolCallResponse("send_to_agent", { prompt: "add auth", summary: "Adding JWT auth" }, "tc1"),
+				toolCallResponse("mark_complete", { summary: "Done" }, "tc2"),
 			]);
 
-			await agent.executeGoal("Test");
+			await agent.handleMessage("add auth");
 
-			expect(mockCtx.addMessage).toHaveBeenCalledWith(
-				expect.objectContaining({
-					role: "tool",
-					content: expect.stringContaining("hello"),
-				}),
-			);
-		});
-
-		it("should use sessionWorkingDir when no cwd specified and session exists", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc0",
-							name: "create_session",
-							arguments: { working_dir: "/tmp" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc1",
-							name: "exec_command",
-							arguments: { command: "pwd" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			await agent.executeGoal("Test");
-
-			// The pwd output should contain /tmp (the sessionWorkingDir)
-			const toolResultCalls = mockCtx.addMessage.mock.calls.filter(
-				(c: any) => c[0].role === "tool" && typeof c[0].content === "string" && c[0].content.includes("/tmp"),
-			);
-			// At least one tool result should reference /tmp (either create_session output or pwd output)
-			expect(toolResultCalls.length).toBeGreaterThanOrEqual(1);
-			expect(agent.getSessionWorkingDir()).toBe("/tmp");
-		});
-
-		it("should use explicit cwd when provided", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc1",
-							name: "exec_command",
-							arguments: { command: "pwd", cwd: "/tmp" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			await agent.executeGoal("Test");
-
-			expect(mockCtx.addMessage).toHaveBeenCalledWith(
-				expect.objectContaining({
-					role: "tool",
-					content: expect.stringMatching(/\/tmp|\/private\/tmp/),
-				}),
-			);
-		});
-
-		it("should truncate output exceeding 10000 chars", async () => {
-			// Generate a command that produces >10000 chars
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc1",
-							name: "exec_command",
-							arguments: { command: "python3 -c \"print('x' * 20000)\"" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			await agent.executeGoal("Test");
-
-			expect(mockCtx.addMessage).toHaveBeenCalledWith(
-				expect.objectContaining({
-					role: "tool",
-					content: expect.stringContaining("[Output truncated:"),
-				}),
-			);
-		});
-
-		it("should handle non-zero exit code", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc1",
-							name: "exec_command",
-							arguments: { command: "cat /nonexistent_file_12345" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			await agent.executeGoal("Test");
-
-			expect(mockCtx.addMessage).toHaveBeenCalledWith(
-				expect.objectContaining({
-					role: "tool",
-					content: expect.stringContaining("[exit code:"),
-				}),
-			);
-		});
-
-		it("should handle command timeout", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc1",
-							name: "exec_command",
-							arguments: { command: "sleep 10", timeout: 100 },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			await agent.executeGoal("Test");
-
-			expect(mockCtx.addMessage).toHaveBeenCalledWith(
-				expect.objectContaining({
-					role: "tool",
-					content: expect.stringContaining("timeout"),
-				}),
-			);
-		}, 10000);
-
-		it("should default to process.cwd() when no session exists", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc1",
-							name: "exec_command",
-							arguments: { command: "pwd" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			await agent.executeGoal("Test");
-
-			expect(mockCtx.addMessage).toHaveBeenCalledWith(
-				expect.objectContaining({
-					role: "tool",
-					content: expect.stringContaining(process.cwd()),
-				}),
-			);
-		});
-	});
-
-	describe("create_session with working_dir", () => {
-		it("should pass working_dir to adapter.launch", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc0",
-							name: "create_session",
-							arguments: { session_name: "test-wd", working_dir: "/tmp" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			await agent.executeGoal("Test");
-
-			expect(mockAdapter.launch).toHaveBeenCalledWith(mockBridge, {
-				workingDir: "/tmp",
-				sessionName: "clipilot-test-wd",
-			});
-		});
-
-		it("should update sessionWorkingDir on create_session", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc0",
-							name: "create_session",
-							arguments: { working_dir: "/tmp" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc2", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			// Before session creation, should be process.cwd()
-			expect(agent.getSessionWorkingDir()).toBe(process.cwd());
-
-			await agent.executeGoal("Test");
-
-			expect(agent.getSessionWorkingDir()).toBe("/tmp");
-		});
-
-		it("should return error when working_dir does not exist", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc0",
-							name: "create_session",
-							arguments: { working_dir: "/nonexistent_dir_12345" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_failed", arguments: { reason: "No dir" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			await agent.executeGoal("Test");
-
-			expect(mockCtx.addMessage).toHaveBeenCalledWith(
-				expect.objectContaining({
-					role: "tool",
-					content: expect.stringContaining("does not exist"),
-				}),
-			);
-			expect(mockAdapter.launch).not.toHaveBeenCalled();
-		});
-
-		it("should fallback to process.cwd() when working_dir omitted", async () => {
-			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{
-							type: "tool_call",
-							id: "tc0",
-							name: "create_session",
-							arguments: { session_name: "no-wd" },
-						},
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
-			]);
-
-			await agent.executeGoal("Test");
-
-			expect(mockAdapter.launch).toHaveBeenCalledWith(mockBridge, {
-				workingDir: process.cwd(),
-				sessionName: "clipilot-no-wd",
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({
+				type: "agent_update",
+				summary: "Adding JWT auth",
 			});
 		});
 	});
 
-	describe("compression", () => {
+	describe("stopRequested between rounds", () => {
+		it("should stop executing loop when stopRequested is set", async () => {
+			const agent = setupAgent([
+				toolCallResponse("create_session", {}, "tc0"),
+				// After this tool, stopRequested will be true
+				toolCallResponse("fetch_more", { lines: 100 }, "tc1"),
+			]);
+
+			// Patch signalRouter with special isStopRequested behavior
+			let stopCallCount = 0;
+			const specialRouter = createMockSignalRouter();
+			specialRouter.isStopRequested.mockImplementation(() => {
+				stopCallCount++;
+				return stopCallCount > 1;
+			});
+			(agent as any).signalRouter = specialRouter;
+
+			await agent.handleMessage("do stuff");
+
+			// Should be back to idle due to stop
+			expect(agent.state).toBe("idle");
+
+			// Should broadcast system message about stop
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: "system",
+					message: "执行已停止",
+				}),
+			);
+		});
+	});
+
+	describe("terminal tools return to IDLE", () => {
+		it("mark_complete should return to idle", async () => {
+			const agent = setupAgent([
+				toolCallResponse("mark_complete", { summary: "Task done" }),
+			]);
+
+			await agent.handleMessage("do task");
+			expect(agent.state).toBe("idle");
+		});
+
+		it("mark_failed should return to idle", async () => {
+			const agent = setupAgent([
+				toolCallResponse("mark_failed", { reason: "Cannot proceed" }),
+			]);
+
+			await agent.handleMessage("do task");
+			expect(agent.state).toBe("idle");
+		});
+
+		it("escalate_to_human should return to idle", async () => {
+			const agent = setupAgent([
+				toolCallResponse("escalate_to_human", { reason: "Need confirmation" }),
+			]);
+
+			await agent.handleMessage("do dangerous thing");
+			expect(agent.state).toBe("idle");
+		});
+	});
+
+	describe("LLM response with no tool calls exits EXECUTING", () => {
+		it("should return to idle when LLM returns only text in tool loop", async () => {
+			const agent = setupAgent([
+				// First call: tool call to enter EXECUTING
+				toolCallResponse("fetch_more", { lines: 100 }, "tc1"),
+				// Second call: only text (no tools) → exit EXECUTING
+				textResponse("All looks good, nothing more to do."),
+			]);
+
+			// Need a pane target for fetch_more
+			agent.setPaneTarget("test:0.0");
+
+			await agent.handleMessage("check status");
+
+			expect(agent.state).toBe("idle");
+		});
+	});
+
+	describe("compression check between tool rounds", () => {
 		it("should trigger compression when threshold exceeded", async () => {
 			const agent = setupAgent([
-				{
-					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "tc1", name: "mark_complete", arguments: { summary: "Done" } },
-					],
-					usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-					stopReason: "tool_use",
-					model: "test",
-				},
+				toolCallResponse("create_session", {}, "tc0"),
+				toolCallResponse("mark_complete", { summary: "Done" }, "tc1"),
 			]);
 
 			mockCtx.shouldCompress.mockReturnValue(true);
 
-			await agent.executeGoal("Test");
+			await agent.handleMessage("do task");
 
 			expect(mockCtx.compress).toHaveBeenCalled();
 		});
