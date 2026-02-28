@@ -15,13 +15,12 @@ export class AppTUI {
 	private configOverlayActive = false;
 	private configView: ConfigView | null = null;
 
-	constructor(signalRouter: SignalRouter, mainAgent: MainAgent, _bridge: TmuxBridge, goal: string) {
+	constructor(signalRouter: SignalRouter, mainAgent: MainAgent, _bridge: TmuxBridge) {
 		this.renderer = new TUIRenderer();
 		this.dashboard = new Dashboard();
 		this.signalRouter = signalRouter;
 		this.mainAgent = mainAgent;
 
-		this.dashboard.setGoal(goal);
 		this.renderer.setRoot(this.dashboard);
 
 		this.setupEventListeners();
@@ -47,23 +46,8 @@ export class AppTUI {
 	}
 
 	private setupEventListeners(): void {
-		this.mainAgent.on("goal_start", (goal) => {
-			this.dashboard.addLog(`▶ Goal: ${goal}`, "info");
-			this.renderer.requestRender();
-		});
-
-		this.mainAgent.on("goal_complete", (result) => {
-			this.dashboard.addLog(`✓ Goal completed: ${result.summary}`, "info");
-			this.renderer.requestRender();
-		});
-
-		this.mainAgent.on("goal_failed", (error) => {
-			this.dashboard.addLog(`✗ Goal failed: ${error}`, "error");
-			this.renderer.requestRender();
-		});
-
-		this.mainAgent.on("need_human", (reason) => {
-			this.dashboard.addLog(`⚠ Needs attention: ${reason}`, "warn");
+		this.mainAgent.on("state_change", (state) => {
+			this.dashboard.addLog(`State: ${state}`, "info");
 			this.renderer.requestRender();
 		});
 
@@ -84,18 +68,18 @@ export class AppTUI {
 
 			switch (data) {
 				case "q":
-					this.signalRouter.abort();
+					this.signalRouter.stop();
 					this.stop();
 					process.exit(0);
 					break;
 
 				case "p":
-					if (this.signalRouter.isPaused()) {
+					if (this.signalRouter.isStopRequested()) {
 						this.signalRouter.resume();
 						this.dashboard.addLog("Resumed");
 					} else {
-						this.signalRouter.pause();
-						this.dashboard.addLog("Paused");
+						this.signalRouter.stop();
+						this.dashboard.addLog("Stopped");
 					}
 					this.renderer.requestRender();
 					break;
