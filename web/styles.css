@@ -126,6 +126,20 @@ body {
 	content: "\2699\FE0F ";
 }
 
+/* Tool activity — lightweight inline notifications */
+.msg.tool-activity {
+	align-self: flex-start;
+	background: rgba(42, 42, 62, 0.5);
+	border-left: 2px solid var(--text-dim);
+	font-size: 0.82em;
+	color: var(--text-dim);
+	padding: 4px 10px;
+}
+
+.msg.tool-activity::before {
+	content: "\26A1 ";
+}
+
 /* System messages — centered */
 .msg.system {
 	align-self: center;
