@@ -605,12 +605,18 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				if (!this.memoryStore) {
 					return { output: "Memory store not available.", terminal: false };
 				}
-				const path = args.path as string;
+				let memGetPath = args.path as string;
 				const from = args.from as number | undefined;
 				const lineCount = args.lines as number | undefined;
 
+				// Strip project prefix if present (e.g. "clipilot-a3f2d1/memory/core.md" → "memory/core.md")
+				const slashIdx = memGetPath.indexOf("/");
+				if (slashIdx > 0 && !memGetPath.startsWith("memory/")) {
+					memGetPath = memGetPath.slice(slashIdx + 1);
+				}
+
 				try {
-					const absPath = join(this.memoryStore.getWorkspaceDir(), path);
+					const absPath = join(this.memoryStore.getStorageDir(), memGetPath);
 					const content = await readFile(absPath, "utf-8");
 					const lines = content.split("\n");
 
@@ -624,7 +630,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					return { output: content, terminal: false };
 				} catch (err: any) {
 					if (err.code === "ENOENT") {
-						return { output: `File not found: ${path}`, terminal: false };
+						return { output: `File not found: ${memGetPath}`, terminal: false };
 					}
 					return { output: `Error reading file: ${err.message}`, terminal: false };
 				}

@@ -23,7 +23,14 @@ import { SkillRegistry } from "./skills/registry.js";
 import { TmuxBridge } from "./tmux/bridge.js";
 import { StateDetector } from "./tmux/state-detector.js";
 import { runConfigTUI } from "./tui/config-app.js";
-import { ensureConfigDir, ensureProjectStorageDir, getProjectStorageDir, loadConfig } from "./utils/config.js";
+import {
+	ensureConfigDir,
+	ensureProjectStorageDir,
+	getGlobalDbPath,
+	getProjectId,
+	getProjectStorageDir,
+	loadConfig,
+} from "./utils/config.js";
 import { logger } from "./utils/logger.js";
 
 async function main(): Promise<void> {
@@ -65,9 +72,9 @@ async function main(): Promise<void> {
 	if (args.rememberText !== undefined) {
 		if (args.rememberText) {
 			const rememberStorageDir = getProjectStorageDir(args.cwd);
-			const dbPath = join(rememberStorageDir, "memory.sqlite");
 			const store = new MemoryStore({
-				dbPath,
+				dbPath: getGlobalDbPath(),
+				projectId: getProjectId(args.cwd),
 				workspaceDir: args.cwd,
 				storageDir: rememberStorageDir,
 				vectorEnabled: false,
@@ -158,12 +165,13 @@ async function main(): Promise<void> {
 
 	// Initialize project storage directory under ~/.clipilot/projects/
 	const storageDir = await ensureProjectStorageDir(args.cwd);
-	logger.info("main", `Project storage: ${storageDir}`);
+	const projectId = getProjectId(args.cwd);
+	logger.info("main", `Project: ${projectId}, storage: ${storageDir}`);
 
-	// Initialize MemoryStore + Embedding Provider
-	const dbPath = join(storageDir, "memory.sqlite");
+	// Initialize MemoryStore + Embedding Provider (global DB)
 	const memoryStore = new MemoryStore({
-		dbPath,
+		dbPath: getGlobalDbPath(),
+		projectId,
 		workspaceDir: args.cwd,
 		storageDir,
 		vectorEnabled: true,
