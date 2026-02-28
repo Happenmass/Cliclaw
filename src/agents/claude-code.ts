@@ -210,8 +210,11 @@ async function sendNamedKey(bridge: TmuxBridge, paneTarget: string, key: string)
 	const mapped = NAMED_KEYS[key];
 	if (mapped) {
 		await bridge.sendKeys(paneTarget, mapped);
-	} else {
+	} else if (key.length === 1) {
 		// Single character — send as literal
 		await bridge.sendKeys(paneTarget, key, { literal: true });
+	} else {
+		// Multi-character key name (e.g. S-Tab, C-c) — send as tmux key name
+		await bridge.sendKeys(paneTarget, key);
 	}
 }
