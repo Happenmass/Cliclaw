@@ -226,6 +226,7 @@ async function main(): Promise<void> {
 		promptLoader,
 		memoryStore,
 		flushThreshold: config.memory.flushThreshold,
+		toolResultRetention: config.memory.toolResultRetention,
 	});
 	contextManager.updateModule("goal", goal);
 

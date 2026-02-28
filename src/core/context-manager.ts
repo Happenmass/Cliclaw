@@ -20,6 +20,8 @@ export interface ContextManagerConfig {
 	flushThreshold?: number;
 	/** MemoryStore for flush writes (optional — flush disabled if not provided) */
 	memoryStore?: MemoryStore;
+	/** Number of recent tool results to keep in full. Older results are summarized. Default 20. */
+	toolResultRetention?: number;
 }
 
 // ─── ContextManager ─────────────────────────────────────
@@ -30,6 +32,7 @@ export class ContextManager {
 	private contextWindowLimit: number;
 	private compressionThreshold: number;
 	private flushThreshold: number;
+	private toolResultRetention: number;
 
 	private promptTemplate: string;
 	private modules: Map<string, string> = new Map();
@@ -50,6 +53,7 @@ export class ContextManager {
 		this.contextWindowLimit = config.contextWindowLimit ?? 128000;
 		this.compressionThreshold = config.compressionThreshold ?? 0.7;
 		this.flushThreshold = config.flushThreshold ?? 0.6;
+		this.toolResultRetention = config.toolResultRetention ?? 20;
 		this.memoryStore = config.memoryStore ?? null;
 
 		// Validate flush < compress invariant
@@ -114,14 +118,49 @@ export class ContextManager {
 
 	/**
 	 * Apply tool result context guard (Layer 1):
+	 * 0. Sliding window: summarize tool results beyond the retention window
 	 * 1. Truncate any single tool result > 50% of context budget
 	 * 2. Replace oldest tool results when total > 75% of context window
 	 */
 	private transformContext(messages: LLMMessage[]): LLMMessage[] {
+		// Step 0: Sliding window compaction
+		const toolResultIndices: number[] = [];
+		for (let i = 0; i < messages.length; i++) {
+			if (messages[i].role === "tool") {
+				toolResultIndices.push(i);
+			}
+		}
+
+		if (toolResultIndices.length > this.toolResultRetention) {
+			const toCompact = toolResultIndices.slice(0, -this.toolResultRetention);
+			const compactedCallIds = new Set<string>();
+
+			for (const idx of toCompact) {
+				const msg = messages[idx];
+				const toolCallId = msg.toolCallId;
+				if (toolCallId) compactedCallIds.add(toolCallId);
+
+				const toolName = this.findToolName(messages, toolCallId, idx);
+				const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+				msg.content = this.summarizeToolResult(toolName, content);
+			}
+
+			// Truncate corresponding tool_call args in assistant messages
+			for (const msg of messages) {
+				if (msg.role === "assistant" && Array.isArray(msg.content)) {
+					for (const block of msg.content) {
+						if (block.type === "tool_call" && compactedCallIds.has(block.id)) {
+							this.truncateToolCallArgs(block);
+						}
+					}
+				}
+			}
+		}
+
+		// Step 1: Truncate oversized single tool results
 		const singleCap = this.contextWindowLimit * 0.5;
 		const singleCapChars = singleCap * 4; // tokens → chars
 
-		// Step 1: Truncate oversized single tool results
 		for (const msg of messages) {
 			if (msg.role === "tool" && typeof msg.content === "string" && msg.content.length > singleCapChars) {
 				msg.content = msg.content.slice(0, singleCapChars) + "\n...[truncated]";
@@ -133,10 +172,15 @@ export class ContextManager {
 		let totalTokens = this.estimateTokens(this.getSystemPrompt()) + this.estimateTokens(messages);
 
 		if (totalTokens > budgetCap) {
-			// Compact oldest tool results first
+			// Compact oldest tool results first (skip already-summarized ones)
 			for (const msg of messages) {
 				if (totalTokens <= budgetCap) break;
-				if (msg.role === "tool" && typeof msg.content === "string" && msg.content !== COMPACTED_PLACEHOLDER) {
+				if (
+					msg.role === "tool" &&
+					typeof msg.content === "string" &&
+					msg.content !== COMPACTED_PLACEHOLDER &&
+					!msg.content.startsWith("[")
+				) {
 					const freed = Math.ceil(msg.content.length / 4);
 					msg.content = COMPACTED_PLACEHOLDER;
 					totalTokens -= freed - Math.ceil(COMPACTED_PLACEHOLDER.length / 4);
@@ -145,6 +189,51 @@ export class ContextManager {
 		}
 
 		return messages;
+	}
+
+	// ─── Sliding Window Helpers ──────────────────────────
+
+	/**
+	 * Find the tool name by searching backwards from a tool result
+	 * for the assistant message containing the matching tool_call.
+	 */
+	private findToolName(messages: LLMMessage[], toolCallId: string | undefined, beforeIndex: number): string {
+		if (!toolCallId) return "unknown";
+		for (let i = beforeIndex - 1; i >= 0; i--) {
+			const msg = messages[i];
+			if (msg.role === "assistant" && Array.isArray(msg.content)) {
+				for (const block of msg.content) {
+					if (block.type === "tool_call" && block.id === toolCallId) {
+						return block.name;
+					}
+				}
+			}
+		}
+		return "unknown";
+	}
+
+	/**
+	 * Generate a brief summary for a compacted tool result.
+	 * Format: [{tool_name} → {status}] {first_line_summary}
+	 */
+	private summarizeToolResult(toolName: string, content: string): string {
+		const firstLine = content.split("\n")[0].trim();
+		const isError =
+			firstLine.startsWith("Error:") || firstLine.startsWith("Failed") || firstLine.includes("[exit code:");
+		const status = isError ? "✗" : "✓";
+		const summary = firstLine.length > 150 ? firstLine.slice(0, 150) + "..." : firstLine;
+		return `[${toolName} → ${status}] ${summary}`;
+	}
+
+	/**
+	 * Truncate long string arguments in a tool_call content block.
+	 */
+	private truncateToolCallArgs(block: ToolCallContent): void {
+		for (const [key, value] of Object.entries(block.arguments)) {
+			if (typeof value === "string" && value.length > 200) {
+				block.arguments[key] = value.slice(0, 200) + "...";
+			}
+		}
 	}
 
 	// ─── Hybrid Token Counting ────────────────────────────

@@ -244,6 +244,241 @@ describe("ContextManager", () => {
 		});
 	});
 
+	describe("sliding window compaction", () => {
+		function buildToolRound(id: string, toolName: string, args: Record<string, any>, result: string) {
+			return {
+				assistant: {
+					role: "assistant" as const,
+					content: [{ type: "tool_call" as const, id, name: toolName, arguments: args }],
+				},
+				tool: {
+					role: "tool" as const,
+					content: result,
+					toolCallId: id,
+				},
+			};
+		}
+
+		it("should keep all tool results when under retention window", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				toolResultRetention: 5,
+			});
+
+			// Add 3 tool rounds (under retention of 5)
+			for (let i = 0; i < 3; i++) {
+				const round = buildToolRound(`tc_${i}`, "exec_command", { command: "ls" }, `file${i}.ts`);
+				ctx.addMessage(round.assistant);
+				ctx.addMessage(round.tool);
+			}
+
+			const prepared = ctx.prepareForLLM();
+			const toolMsgs = prepared.messages.filter((m) => m.role === "tool");
+
+			expect(toolMsgs).toHaveLength(3);
+			for (let i = 0; i < 3; i++) {
+				expect(toolMsgs[i].content).toBe(`file${i}.ts`);
+			}
+		});
+
+		it("should summarize old tool results and keep recent ones intact", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				toolResultRetention: 2,
+			});
+
+			// Add 4 tool rounds (retention = 2, so first 2 get summarized)
+			const rounds = [
+				buildToolRound("tc_0", "create_session", { session_name: "test" }, 'Session "clipilot-test" created in /tmp'),
+				buildToolRound("tc_1", "send_to_agent", { prompt: "do stuff" }, "[Agent completed] (Task done)\nLong output..."),
+				buildToolRound("tc_2", "exec_command", { command: "ls" }, "src/ test/ package.json"),
+				buildToolRound("tc_3", "respond_to_agent", { value: "y" }, "[Agent completed] (Confirmed)\nMore output"),
+			];
+			for (const r of rounds) {
+				ctx.addMessage(r.assistant);
+				ctx.addMessage(r.tool);
+			}
+
+			const prepared = ctx.prepareForLLM();
+			const toolMsgs = prepared.messages.filter((m) => m.role === "tool");
+
+			// First 2 should be summarized
+			expect(toolMsgs[0].content).toBe('[create_session → ✓] Session "clipilot-test" created in /tmp');
+			expect(toolMsgs[1].content).toBe("[send_to_agent → ✓] [Agent completed] (Task done)");
+
+			// Last 2 should be intact
+			expect(toolMsgs[2].content).toBe("src/ test/ package.json");
+			expect(toolMsgs[3].content).toBe("[Agent completed] (Confirmed)\nMore output");
+		});
+
+		it("should detect failure status from Error: prefix", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				toolResultRetention: 1,
+			});
+
+			const rounds = [
+				buildToolRound("tc_0", "send_to_agent", { prompt: "x" }, "Error: No active session. Call create_session first."),
+				buildToolRound("tc_1", "exec_command", { command: "ls" }, "ok"),
+			];
+			for (const r of rounds) {
+				ctx.addMessage(r.assistant);
+				ctx.addMessage(r.tool);
+			}
+
+			const prepared = ctx.prepareForLLM();
+			const toolMsgs = prepared.messages.filter((m) => m.role === "tool");
+			expect(toolMsgs[0].content).toContain("send_to_agent → ✗");
+		});
+
+		it("should detect failure status from Failed prefix", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				toolResultRetention: 1,
+			});
+
+			const rounds = [
+				buildToolRound("tc_0", "create_session", { session_name: "x" }, "Failed to create session: timeout"),
+				buildToolRound("tc_1", "exec_command", { command: "ls" }, "ok"),
+			];
+			for (const r of rounds) {
+				ctx.addMessage(r.assistant);
+				ctx.addMessage(r.tool);
+			}
+
+			const prepared = ctx.prepareForLLM();
+			const toolMsgs = prepared.messages.filter((m) => m.role === "tool");
+			expect(toolMsgs[0].content).toContain("create_session → ✗");
+		});
+
+		it("should detect failure status from [exit code: pattern", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				toolResultRetention: 1,
+			});
+
+			const rounds = [
+				buildToolRound("tc_0", "exec_command", { command: "bad" }, "[exit code: 1]\ncommand not found"),
+				buildToolRound("tc_1", "exec_command", { command: "ls" }, "ok"),
+			];
+			for (const r of rounds) {
+				ctx.addMessage(r.assistant);
+				ctx.addMessage(r.tool);
+			}
+
+			const prepared = ctx.prepareForLLM();
+			const toolMsgs = prepared.messages.filter((m) => m.role === "tool");
+			expect(toolMsgs[0].content).toContain("exec_command → ✗");
+		});
+
+		it("should truncate tool_call arguments for compacted results", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				toolResultRetention: 1,
+			});
+
+			const longPrompt = "x".repeat(500);
+			const rounds = [
+				buildToolRound("tc_0", "send_to_agent", { prompt: longPrompt }, "[Agent completed] (Done)\noutput"),
+				buildToolRound("tc_1", "exec_command", { command: "ls" }, "ok"),
+			];
+			for (const r of rounds) {
+				ctx.addMessage(r.assistant);
+				ctx.addMessage(r.tool);
+			}
+
+			const prepared = ctx.prepareForLLM();
+			const assistantMsg = prepared.messages.find(
+				(m) => m.role === "assistant" && Array.isArray(m.content) && m.content.some((b: any) => b.id === "tc_0"),
+			);
+			const toolCallBlock = (assistantMsg!.content as any[]).find((b: any) => b.id === "tc_0");
+			expect(toolCallBlock.arguments.prompt.length).toBeLessThanOrEqual(203); // 200 + "..."
+			expect(toolCallBlock.arguments.prompt).toContain("...");
+		});
+
+		it("should not truncate short tool_call arguments", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				toolResultRetention: 1,
+			});
+
+			const rounds = [
+				buildToolRound("tc_0", "respond_to_agent", { value: "y" }, "[Agent completed] (Done)"),
+				buildToolRound("tc_1", "exec_command", { command: "ls" }, "ok"),
+			];
+			for (const r of rounds) {
+				ctx.addMessage(r.assistant);
+				ctx.addMessage(r.tool);
+			}
+
+			const prepared = ctx.prepareForLLM();
+			const assistantMsg = prepared.messages.find(
+				(m) => m.role === "assistant" && Array.isArray(m.content) && m.content.some((b: any) => b.id === "tc_0"),
+			);
+			const toolCallBlock = (assistantMsg!.content as any[]).find((b: any) => b.id === "tc_0");
+			expect(toolCallBlock.arguments.value).toBe("y");
+		});
+
+		it("should return 'unknown' when toolCallId has no matching tool_call", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				toolResultRetention: 1,
+			});
+
+			// Add a tool result without a preceding assistant tool_call
+			ctx.addMessage({ role: "tool", content: "orphan result", toolCallId: "nonexistent" });
+			ctx.addMessage({
+				role: "assistant",
+				content: [{ type: "tool_call", id: "tc_1", name: "exec_command", arguments: { command: "ls" } }],
+			});
+			ctx.addMessage({ role: "tool", content: "ok", toolCallId: "tc_1" });
+
+			const prepared = ctx.prepareForLLM();
+			const toolMsgs = prepared.messages.filter((m) => m.role === "tool");
+			expect(toolMsgs[0].content).toContain("unknown → ✓");
+		});
+
+		it("should not re-compact already-summarized results in Step 2 budget overflow", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				contextWindowLimit: 500, // Very small to trigger budget overflow
+				toolResultRetention: 1,
+				flushThreshold: 0.3,
+			});
+
+			// Add 3 tool rounds — first 2 get summarized by Step 0
+			const rounds = [
+				buildToolRound("tc_0", "exec_command", { command: "ls" }, "file1.ts\nfile2.ts"),
+				buildToolRound("tc_1", "send_to_agent", { prompt: "do" }, "[Agent completed] (Done)\n" + "x".repeat(2000)),
+				buildToolRound("tc_2", "exec_command", { command: "pwd" }, "/home/user/project"),
+			];
+			for (const r of rounds) {
+				ctx.addMessage(r.assistant);
+				ctx.addMessage(r.tool);
+			}
+
+			const prepared = ctx.prepareForLLM();
+			const toolMsgs = prepared.messages.filter((m) => m.role === "tool");
+
+			// First 2 should be summarized by Step 0 (start with "[")
+			expect(toolMsgs[0].content).toMatch(/^\[exec_command/);
+			expect(toolMsgs[1].content).toMatch(/^\[send_to_agent/);
+
+			// They should NOT be replaced by COMPACTED_PLACEHOLDER
+			expect(toolMsgs[0].content).not.toContain("compacted");
+			expect(toolMsgs[1].content).not.toContain("compacted");
+		});
+	});
+
 	describe("hybrid token counting", () => {
 		it("should accumulate pending chars from addMessage", () => {
 			contextManager.addMessage({ role: "user", content: "hello" }); // 5 chars

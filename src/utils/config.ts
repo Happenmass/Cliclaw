@@ -47,6 +47,8 @@ export interface MemoryConfig {
 	decayHalfLifeDays: number;
 	/** Context window flush threshold ratio. Default 0.6. */
 	flushThreshold: number;
+	/** Number of recent tool results to keep in full context. Older results are summarized. Default 20. */
+	toolResultRetention: number;
 }
 
 export interface SkillsConfig {
@@ -94,6 +96,7 @@ const DEFAULT_CONFIG: CLIPilotConfig = {
 		topK: 10,
 		decayHalfLifeDays: 30,
 		flushThreshold: 0.6,
+		toolResultRetention: 20,
 	},
 	skills: {
 		disabled: [],
