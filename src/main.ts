@@ -254,6 +254,7 @@ async function main(): Promise<void> {
 	const baseCapabilities = adapterCapabilities || "Direct code editing and file operations\nRunning terminal commands";
 	const capabilitiesSummary = buildCapabilitiesSummary(baseCapabilities, filteredSkills);
 	contextManager.updateModule("agent_capabilities", capabilitiesSummary);
+	contextManager.updateModule("openspec_tool_name", defaultAdapter.getOpenSpecToolName?.() ?? "claude");
 	const skillRegistry = new SkillRegistry(filteredSkills);
 	logger.info("main", `Skills loaded: ${skillRegistry.size} (${filteredSkills.map((s) => s.name).join(", ")})`);
 

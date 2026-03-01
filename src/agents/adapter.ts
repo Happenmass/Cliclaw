@@ -69,6 +69,9 @@ export interface AgentAdapter {
 	/** Return the relative path to the adapter's capabilities file under prompts/ (e.g. "adapters/claude-code.md") */
 	getCapabilitiesFile?(): string;
 
+	/** Return the tool name for `openspec init --tools <name>` (e.g. "claude", "codex") */
+	getOpenSpecToolName?(): string;
+
 	/** Exit the agent process and return captured output with optional session id */
 	exitAgent?(bridge: TmuxBridge, paneTarget: string): Promise<ExitAgentResult>;
 }

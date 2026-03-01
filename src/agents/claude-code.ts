@@ -132,6 +132,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 		return "adapters/claude-code.md";
 	}
 
+	getOpenSpecToolName(): string {
+		return "claude";
+	}
+
 	async exitAgent(bridge: TmuxBridge, paneTarget: string): Promise<ExitAgentResult> {
 		logger.info("claude-code", "Exiting agent with double Ctrl+C");
 
