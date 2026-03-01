@@ -3,56 +3,47 @@ name: openspec
 description: "Spec-driven development workflow for structured changes"
 type: agent-capability
 commands:
-  - /opsx:new
-  - /opsx:ff
-  - /opsx:apply
-  - /opsx:verify
   - /opsx:explore
+  - /opsx:propose
+  - /opsx:apply
   - /opsx:archive
 when:
-  files: [".openspec.yaml"]
+  files: ["openspec"]
 ---
 
 # OpenSpec Skill
 
-OpenSpec provides a spec-driven development workflow. Use it for complex or architectural changes that benefit from upfront planning.
+OpenSpec 提供规范驱动的开发工作流。适用于涉及多文件、架构变更、需要前期规划的复杂任务。
 
-## When to Use
+## 适用场景
 
-- Complex features requiring multiple files/modules
-- Architectural changes with design decisions
-- Changes that benefit from specs and task tracking
+- 涉及多文件/模块的复杂功能
+- 需要设计决策的架构变更
+- 需要规范和任务跟踪的变更
 
-## Commands
-
-### /opsx:new
-Create a new change with scaffolded artifacts directory.
-
-### /opsx:ff
-Fast-forward: create a change and generate all artifacts (proposal, design, specs, tasks) in one step. Best for well-understood changes.
-
-### /opsx:apply
-Implement tasks from an existing change. Reads context files and works through the task list.
-
-### /opsx:verify
-Verify that implementation matches the change's specs and design.
+## 命令
 
 ### /opsx:explore
-Enter explore mode — think through ideas, investigate problems, clarify requirements before committing to a design.
+进入探索模式——思考问题、调查代码库、讨论需求。在提出正式方案前使用，帮助澄清问题和方向。
+
+### /opsx:propose
+提出变更方案——一步生成所有产物：proposal.md, design.md, specs/, tasks.md。适合目标明确的变更。
+
+### /opsx:apply
+按 tasks.md 中的任务列表逐步实现。读取 proposal, design, specs 作为上下文。
 
 ### /opsx:archive
-Archive a completed change, syncing delta specs to main specs.
+归档已完成的变更，将 delta specs 同步到主 specs。
 
-## Workflow
+## 工作流
 
-1. **Explore** (`/opsx:explore`) — Optional: think through the problem
-2. **Create** (`/opsx:new` or `/opsx:ff`) — Define what to build
-3. **Implement** (`/opsx:apply`) — Work through tasks
-4. **Verify** (`/opsx:verify`) — Check implementation matches spec
-5. **Archive** (`/opsx:archive`) — Finalize and archive
+1. **探索** (`/opsx:explore`) — 可选：思考问题、调查现状
+2. **提案** (`/opsx:propose`) — 定义要做什么、怎么做
+3. **实现** (`/opsx:apply`) — 按任务列表逐步执行
+4. **归档** (`/opsx:archive`) — 完成并归档
 
 ## Tips for MainAgent
 
-- For high-complexity tasks, suggest the agent use `/opsx:ff` to plan before implementing
-- When a task involves significant refactoring, consider `/opsx:explore` first
-- Include specific context (file paths, function names, constraints) when constructing prompts that reference OpenSpec commands
+- 复杂任务优先使用 `/opsx:propose` 进行规划后再实现
+- 涉及重大重构时，先用 `/opsx:explore` 探索
+- 构建包含 OpenSpec 命令的 prompt 时，附上具体的文件路径、函数名、约束条件等上下文
