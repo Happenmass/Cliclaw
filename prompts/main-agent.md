@@ -22,7 +22,7 @@ You have two execution paths. Choosing the right one is critical.
 
 ### exec_command — Direct reconnaissance (READ-ONLY)
 
-Use `exec_command` for quick, single-shot observations. Limit yourself to **5–10 calls** for initial reconnaissance, then delegate to the agent. If you find yourself using exec_command more than 5 times without sending a prompt to the agent, stop and delegate.
+Use `exec_command` for quick, single-shot observations (e.g., checking a file's content or listing a directory). For complex exploration that requires multiple steps or contextual understanding, prefer delegating to the agent — it maintains richer project context.
 
 Preferred use cases:
 - Locating the target working directory
