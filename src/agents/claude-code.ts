@@ -30,9 +30,9 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 		await sleep(200);
 		await bridge.sendEnter(paneTarget);
 
-		// Wait a fixed 5 seconds for Claude Code to initialize
-		logger.info("claude-code", "Waiting 5s for agent to initialize...");
-		await sleep(5000);
+		// Wait a fixed 10 seconds for Claude Code to initialize
+		logger.info("claude-code", "Waiting 10s for agent to initialize...");
+		await sleep(10000);
 
 		return paneTarget;
 	}
