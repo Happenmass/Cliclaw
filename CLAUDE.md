@@ -32,9 +32,9 @@ npm start              # node dist/main.js — starts the server on port 3120
 
 ## Architecture
 
-### Entry Point (`src/main.ts`)
-Parses CLI args, loads config/memory, initializes all components, starts the server:
-1. **Bootstrap** — MemoryStore (SQLite), EmbeddingProvider (auto-fallback), initial memory file sync, skill discovery → filter → registry, ConversationStore initialization
+### Entry Point (`src/main.ts`) and CLI (`src/cli.ts`)
+`cli.ts` exports `parseCliArgs()` for CLI argument parsing (--agent, --provider, --model, --base-url, --port, --cwd, etc.) and `printHelp()`/`printVersion()`. `main.ts` orchestrates startup:
+1. **Bootstrap** — MemoryStore (SQLite), EmbeddingProvider (auto-fallback), initial memory file sync, skill discovery → filter → registry, ConversationStore initialization, CommandRegistry setup
 2. **Restore** — If SQLite has existing messages, restore conversation into ContextManager
 3. **Serve** — Start Express + WebSocket server on configurable port (default 3120)
 4. **Shutdown** — SIGINT/SIGTERM triggers graceful shutdown (stop agent → close server → close DB)
@@ -49,7 +49,7 @@ Chat-driven decision engine with a two-state machine: **IDLE** ↔ **EXECUTING**
 
 Uses `llmClient.stream()` for all LLM calls — text deltas are broadcast to WebSocket clients in real-time.
 
-Emits events: `state_change`, `log`. 13 built-in tools:
+Emits events: `state_change`, `log`. 14 built-in tools:
 - `send_to_agent` / `respond_to_agent` — interact with coding agent in tmux (both have required `summary` parameter for chat UI updates)
 - `fetch_more` — capture more tmux pane content
 - `mark_complete` / `mark_failed` — terminal: return to IDLE
@@ -58,15 +58,17 @@ Emits events: `state_change`, `log`. 13 built-in tools:
 - `read_skill` — read full SKILL.md content on demand
 - `create_session` — create a `clipilot-` prefixed tmux session and launch agent
 - `list_clipilot_sessions` — list all `clipilot-` prefixed sessions
+- `exit_agent` — exit the current coding agent process, returns captured output and optional session id for resume
 - `exec_command` — execute read-only bash commands for reconnaissance
 
 ### Server Layer (`src/server/`)
 HTTP + WebSocket server for the chat interface.
 
 - `index.ts` — Express app creation, static file serving (`web/`), REST API (`/api/history`, `/api/status`), WebSocket server on `/ws` path. `startServer()` returns a `ServerInstance` with a `close()` method.
-- `chat-broadcaster.ts` — Manages WebSocket client connections. `broadcast(message)` sends to all connected clients. Used by MainAgent to push `assistant_delta`, `assistant_done`, `agent_update`, `state`, `system`, `clear` messages.
+- `chat-broadcaster.ts` — Manages WebSocket client connections. `broadcast(message)` sends to all connected clients. Used by MainAgent to push `assistant_delta`, `assistant_done`, `agent_update`, `tool_activity`, `state`, `system`, `clear` messages.
 - `ws-handler.ts` — Handles individual WebSocket connections. Routes `{ type: "message" }` to `MainAgent.handleMessage()` and `{ type: "command" }` to `CommandRouter`. Sends current state on connect.
 - `command-router.ts` — Handles slash commands (`/stop`, `/resume`, `/clear`). `/stop` sets `stopRequested` on SignalRouter. `/resume` calls `MainAgent.handleResume()`. `/clear` stops execution → runs memory flush → clears SQLite → broadcasts clear event.
+- `command-registry.ts` — Central registry for slash command metadata (`CommandDescriptor`). Stores both built-in and skill-declared commands. Methods: `register()`, `registerMany()`, `get()`, `has()`, `getAll()`, `search()`. Skills can dynamically register commands at startup.
 - `message-queue.ts` — Simple FIFO queue for human messages received during EXECUTING state. Drained between tool-use rounds.
 
 ### Conversation Persistence (`src/persistence/`)
@@ -142,23 +144,31 @@ Minimal vanilla HTML/CSS/JS chat interface served by Express as static files.
 - `styles.css` — dark theme, message bubbles (user/assistant/agent-update/system), status indicator with idle/executing animation
 - `app.js` — WebSocket connection management (connect/reconnect), message routing, streaming delta display, slash command support, basic Markdown rendering, history loading via `/api/history`
 
+### Agent Adapters (`src/agents/`)
+- `adapter.ts` — `AgentAdapter` interface: abstract contract for agent implementations. Defines `LaunchOptions`, `ExitAgentResult`, `OpenSpecCommands`, `AgentCharacteristics` types. Methods: `launch()`, `sendPrompt()`, `sendResponse()`, `abort()`, `shutdown()`, `exitAgent()`, `getCharacteristics()`, `getSkillsDir()`, `getCapabilitiesFile()`, `getOpenSpecCommands()`.
+- `claude-code.ts` — `ClaudeCodeAdapter`: concrete implementation for Claude Code agent.
+
 ### Other Components
 - `TmuxBridge` (`src/tmux/bridge.ts`) — tmux command wrapper (create sessions, send keys, capture panes, `listClipilotSessions()`)
 - `Session` (`src/core/session.ts`) — session lifecycle management
-- `ClaudeCodeAdapter` (`src/agents/claude-code.ts`) — agent adapter for Claude Code
 - `AppTUI` (`src/tui/app.ts`) — legacy TUI dashboard (still compiles but not used as primary interface)
 
 ## Testing
 
-Tests live in `test/` mirroring `src/` structure. All tests mock external dependencies (LLM calls, tmux commands).
+Tests live in `test/` mirroring `src/` structure (36 test files). All tests mock external dependencies (LLM calls, tmux commands).
 
-Key test files:
-- `test/core/main-agent.test.ts` — MainAgent state machine tests (IDLE → EXECUTING → IDLE, streaming, message queuing, stopRequested, terminal tools)
-- `test/core/integration.test.ts` — End-to-end flow: handleMessage → streaming LLM → tool execution → state transitions (uses real ContextManager + SignalRouter)
-- `test/server/command-router.test.ts` — Slash command handling (/stop, /resume, /clear)
-- `test/server/ws-handler.test.ts` — WebSocket connection handling, message routing
-- `test/persistence/conversation-store.test.ts` — SQLite persistence layer
-- `test/core/context-manager-persistence.test.ts` — ContextManager persistence, restore, clear
+Key test directories:
+- `test/core/` — MainAgent state machine, integration flow, ContextManager (incl. persistence), memory tools, signal-router
+- `test/server/` — command-router, command-registry, ws-handler
+- `test/persistence/` — conversation-store SQLite layer
+- `test/agents/` — claude-code response parsing, exit behavior, adapter skills
+- `test/memory/` — store, search, chunker, category, embedder
+- `test/skills/` — parser, reader, discovery, filter, injector, registry, tool-merge, read-skill-tool, adapter-skills, integration
+- `test/tmux/` — bridge, state-detector
+- `test/llm/` — providers, prompt-loader
+- `test/doctor/` — tmux/config/api-key checks
+- `test/tui/` — config editor
+- `test/utils/` — config utilities
 
 ## Config
 
@@ -182,6 +192,7 @@ Server → Client:
 - `{ type: "assistant_delta", delta: string }` — streaming text fragment
 - `{ type: "assistant_done" }` — streaming response complete
 - `{ type: "agent_update", summary: string }` — agent interaction summary
+- `{ type: "tool_activity", summary: string }` — exec_command execution summary (throttled: every 3rd call)
 - `{ type: "state", state: "idle" | "executing" }` — state change
 - `{ type: "system", message: string }` — system notification
 - `{ type: "clear" }` — clear chat history on frontend
