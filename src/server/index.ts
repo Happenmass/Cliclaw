@@ -12,6 +12,7 @@ import { buildAuthCookie, createServerAuthToken, isAuthorized } from "./auth.js"
 import type { ChatBroadcaster } from "./chat-broadcaster.js";
 import type { CommandRegistry } from "./command-registry.js";
 import { CommandRouter } from "./command-router.js";
+import type { ExecutionEventStore } from "./execution-events.js";
 import { handleWebSocket } from "./ws-handler.js";
 
 export interface ServerOptions {
@@ -23,6 +24,7 @@ export interface ServerOptions {
 	conversationStore: ConversationStore;
 	broadcaster: ChatBroadcaster;
 	commandRegistry: CommandRegistry;
+	executionEventStore: ExecutionEventStore;
 }
 
 export interface ServerInstance {
@@ -34,7 +36,17 @@ export interface ServerInstance {
  * Create and start the CLIPilot HTTP + WebSocket server.
  */
 export async function startServer(opts: ServerOptions): Promise<ServerInstance> {
-	const { host = "127.0.0.1", port, mainAgent, signalRouter, contextManager, conversationStore, broadcaster, commandRegistry } = opts;
+	const {
+		host = "127.0.0.1",
+		port,
+		mainAgent,
+		signalRouter,
+		contextManager,
+		conversationStore,
+		broadcaster,
+		commandRegistry,
+		executionEventStore,
+	} = opts;
 
 	const app = express();
 	app.use(express.json());
@@ -81,6 +93,12 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		res.json(commandRegistry.search(query));
 	});
 
+	app.get("/api/execution-events", (req, res) => {
+		const limitRaw = typeof req.query.limit === "string" ? Number.parseInt(req.query.limit, 10) : undefined;
+		const limit = Number.isFinite(limitRaw) ? limitRaw : 50;
+		res.json(executionEventStore.listRecent(limit));
+	});
+
 	// ─── HTTP server ────────────────────────────────────
 	const server = createServer(app);
 
@@ -93,6 +111,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		contextManager,
 		broadcaster,
 		commandRegistry,
+		executionEventStore,
 	});
 
 	wss.on("connection", (ws: WebSocket, req) => {

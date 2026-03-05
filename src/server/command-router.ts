@@ -4,6 +4,7 @@ import type { SignalRouter } from "../core/signal-router.js";
 import { logger } from "../utils/logger.js";
 import type { ChatBroadcaster } from "./chat-broadcaster.js";
 import type { CommandDescriptor, CommandRegistry } from "./command-registry.js";
+import type { ExecutionEventStore } from "./execution-events.js";
 
 /** Built-in command descriptors registered at construction time */
 const BUILTIN_COMMANDS: CommandDescriptor[] = [
@@ -21,6 +22,7 @@ export class CommandRouter {
 	private signalRouter: SignalRouter;
 	private contextManager: ContextManager;
 	private broadcaster: ChatBroadcaster;
+	private executionEventStore: ExecutionEventStore | null;
 
 	constructor(opts: {
 		mainAgent: MainAgent;
@@ -28,11 +30,13 @@ export class CommandRouter {
 		contextManager: ContextManager;
 		broadcaster: ChatBroadcaster;
 		commandRegistry: CommandRegistry;
+		executionEventStore?: ExecutionEventStore;
 	}) {
 		this.mainAgent = opts.mainAgent;
 		this.signalRouter = opts.signalRouter;
 		this.contextManager = opts.contextManager;
 		this.broadcaster = opts.broadcaster;
+		this.executionEventStore = opts.executionEventStore ?? null;
 
 		// Register built-in commands into the central registry
 		opts.commandRegistry.registerMany(BUILTIN_COMMANDS);
@@ -88,6 +92,7 @@ export class CommandRouter {
 
 		// Clear context (runs memory flush → clears memory → clears SQLite)
 		await this.contextManager.clear();
+		this.executionEventStore?.clear();
 
 		// Broadcast clear event to all clients
 		this.broadcaster.broadcast({ type: "clear" });

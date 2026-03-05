@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -11,6 +12,15 @@ import { searchMemory } from "../memory/search.js";
 import type { MemoryStore } from "../memory/store.js";
 import type { EmbeddingProvider, HybridSearchConfig, MemoryCategory } from "../memory/types.js";
 import type { ChatBroadcaster } from "../server/chat-broadcaster.js";
+import type {
+	ExecutionEvent,
+	ExecutionEventStore,
+	ExecutionPaneSnippet,
+	ExecutionPersistenceEvidence,
+	ExecutionTestEvidence,
+	ExecutionVerificationEvidence,
+	ExecutionWorkspaceEvidence,
+} from "../server/execution-events.js";
 import { MessageQueue } from "../server/message-queue.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
@@ -27,6 +37,8 @@ export interface MainAgentEvents {
 	state_change: [state: AgentState];
 	log: [message: string];
 }
+
+const execFileAsync = promisify(execFile);
 
 // ─── Tool definitions ───────────────────────────────────
 
@@ -252,6 +264,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private bridge: TmuxBridge;
 	private stateDetector: StateDetector;
 	private broadcaster: ChatBroadcaster;
+	private executionEventStore: ExecutionEventStore | null = null;
 	private messageQueue = new MessageQueue();
 	private pendingUserMessages: string[] = [];
 	private isDrainingUserMessages = false;
@@ -283,6 +296,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		bridge: TmuxBridge;
 		stateDetector: StateDetector;
 		broadcaster: ChatBroadcaster;
+		executionEventStore?: ExecutionEventStore;
 		memoryStore?: MemoryStore;
 		syncMemory?: () => Promise<void>;
 		embeddingProvider?: EmbeddingProvider | null;
@@ -298,6 +312,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.bridge = opts.bridge;
 		this.stateDetector = opts.stateDetector;
 		this.broadcaster = opts.broadcaster;
+		this.executionEventStore = opts.executionEventStore ?? null;
 		this.memoryStore = opts.memoryStore ?? null;
 		this.syncMemory = opts.syncMemory ?? null;
 		this.embeddingProvider = opts.embeddingProvider ?? null;
@@ -667,6 +682,197 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		logger.error("main-agent", `${source} error: ${err.message}`);
 	}
 
+	private emitExecutionEvent(event: Omit<ExecutionEvent, "id" | "createdAt">): ExecutionEvent {
+		const completeEvent: ExecutionEvent = {
+			...event,
+			id: randomUUID(),
+			createdAt: Date.now(),
+		};
+		this.executionEventStore?.add(completeEvent);
+		this.broadcaster.broadcast({ type: "execution_event", event: completeEvent });
+		return completeEvent;
+	}
+
+	private createExecutionRunId(toolName: string): string {
+		return `${toolName}-${randomUUID()}`;
+	}
+
+	private buildPaneSnippet(content: string, ansiContent?: string, maxLines = 40, maxChars = 4000): ExecutionPaneSnippet {
+		const plainLines = content.split("\n");
+		const paneContent = plainLines.slice(-maxLines).join("\n").slice(-maxChars);
+		const snippet: ExecutionPaneSnippet = {
+			content: paneContent,
+			lines: Math.min(plainLines.length, maxLines),
+			capturedAt: Date.now(),
+		};
+
+		if (ansiContent) {
+			const ansiLines = ansiContent.split("\n");
+			snippet.ansiContent = ansiLines.slice(-maxLines).join("\n").slice(-maxChars);
+		}
+
+		return snippet;
+	}
+
+	private async captureAnsiPaneContent(maxLines = 40): Promise<string | undefined> {
+		if (!this.paneTarget) return undefined;
+
+		try {
+			const capture = await this.bridge.capturePane(this.paneTarget, {
+				startLine: -maxLines,
+				escapeSequences: true,
+			});
+			return capture.content;
+		} catch (err: any) {
+			logger.warn("main-agent", `Failed to capture ANSI pane content: ${err.message}`);
+			return undefined;
+		}
+	}
+
+	private async collectWorkspaceEvidence(workingDir: string): Promise<ExecutionWorkspaceEvidence> {
+		const unavailable = {
+			workingDir,
+			available: false,
+			changedFiles: [],
+		} satisfies ExecutionWorkspaceEvidence;
+
+		try {
+			await execFileAsync("git", ["-C", workingDir, "rev-parse", "--is-inside-work-tree"], {
+				timeout: 5000,
+				maxBuffer: 1024 * 64,
+			});
+		} catch {
+			return unavailable;
+		}
+
+		try {
+			const { stdout: statusStdout } = await execFileAsync("git", ["-C", workingDir, "status", "--short"], {
+				timeout: 5000,
+				maxBuffer: 1024 * 256,
+			});
+			const { stdout: diffStatStdout } = await execFileAsync(
+				"git",
+				["-C", workingDir, "diff", "--stat", "--no-ext-diff"],
+				{
+					timeout: 5000,
+					maxBuffer: 1024 * 256,
+				},
+			);
+
+			const changedFiles = this.parseChangedFiles(statusStdout);
+			const diffStat = diffStatStdout.trim() || undefined;
+
+			return {
+				workingDir,
+				available: true,
+				changedFiles,
+				diffStat,
+				diffSummary: this.buildDiffSummary(diffStat, changedFiles),
+			};
+		} catch (err: any) {
+			logger.warn("main-agent", `Failed to collect workspace evidence: ${err.message}`);
+			return unavailable;
+		}
+	}
+
+	private parseChangedFiles(statusOutput: string): string[] {
+		return statusOutput
+			.split("\n")
+			.map((line) => line.trimEnd())
+			.filter((line) => line.length > 3)
+			.map((line) => {
+				const pathPart = line.slice(3).trim();
+				if (pathPart.includes(" -> ")) {
+					return pathPart.split(" -> ").at(-1) ?? pathPart;
+				}
+				return pathPart;
+			});
+	}
+
+	private buildDiffSummary(diffStat: string | undefined, changedFiles: string[]): string[] {
+		if (diffStat) {
+			const lines = diffStat
+				.split("\n")
+				.map((line) => line.trim())
+				.filter((line) => line.length > 0);
+			if (lines.length > 0) {
+				return lines.slice(0, 6);
+			}
+		}
+
+		return changedFiles.slice(0, 5).map((file) => `${file}: changed`);
+	}
+
+	private extractTestEvidence(content: string): ExecutionTestEvidence {
+		const commandMatch = content.match(
+			/(npm test|npm run test(?::[\w-]+)?|pnpm test|pnpm vitest|npx vitest[^\n]*|vitest(?: run)?|jest[^\n]*|yarn test|bun test|npm run build|pnpm build|tsc --noEmit)/i,
+		);
+		const failedMatch = content.match(
+			/(\b\d+\s+failed\b|test suites?:\s*\d+\s+failed|tests?\s+failed|failing|build failed|error:.*test)/i,
+		);
+		const passedMatch = content.match(
+			/(\b\d+\s+passed\b|test suites?:\s*\d+\s+passed|all tests passed|build successful|compiled successfully)/i,
+		);
+
+		if (failedMatch) {
+			return {
+				status: "failed",
+				summary: failedMatch[0],
+				command: commandMatch?.[0],
+			};
+		}
+
+		if (passedMatch) {
+			return {
+				status: "passed",
+				summary: passedMatch[0],
+				command: commandMatch?.[0],
+			};
+		}
+
+		if (commandMatch) {
+			return {
+				status: "unknown",
+				summary: `Detected verification command: ${commandMatch[0]}`,
+				command: commandMatch[0],
+			};
+		}
+
+		return {
+			status: "not_run",
+			summary: "No test or build command detected",
+		};
+	}
+
+	private buildVerificationEvidence(test: ExecutionTestEvidence): ExecutionVerificationEvidence {
+		if (test.status === "passed" || test.status === "failed") {
+			return {
+				status: "verified",
+				summary: test.status === "passed" ? "Verification command completed successfully" : "Verification command reported failures",
+			};
+		}
+
+		if (test.status === "unknown") {
+			return {
+				status: "insufficient_evidence",
+				summary: "Verification command detected, but final result was unclear",
+			};
+		}
+
+		return {
+			status: "unverified",
+			summary: "No verification command detected in the available evidence",
+		};
+	}
+
+	private createPersistenceEvidence(overrides?: Partial<ExecutionPersistenceEvidence>): ExecutionPersistenceEvidence {
+		return {
+			memoryWrites: [],
+			conversationPersisted: true,
+			...overrides,
+		};
+	}
+
 	private resolveMemoryGetTarget(rawPath: string): { storageDir: string; relativePath: string } {
 		if (!this.memoryStore) {
 			throw new Error("Memory store not available.");
@@ -732,9 +938,21 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				}
 				const prompt = args.prompt as string;
 				const summary = args.summary as string;
+				const runId = this.createExecutionRunId(name);
 
 				// Broadcast agent update with summary
 				this.broadcaster.broadcast({ type: "agent_update", summary });
+				this.emitExecutionEvent({
+					runId,
+					phase: "planned",
+					toolName: name,
+					summary,
+					workspace: {
+						workingDir: this.sessionWorkingDir,
+						available: false,
+						changedFiles: [],
+					},
+				});
 
 				const sendPreHash = await this.stateDetector.captureHash(this.paneTarget);
 				await this.adapter.sendPrompt(this.bridge, this.paneTarget, prompt);
@@ -744,6 +962,20 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					isAborted: () => this.signalRouter.isStopRequested(),
 				});
 				const sendStatus = sendResult.timedOut ? "timeout" : sendResult.analysis.status;
+				const ansiContent = await this.captureAnsiPaneContent();
+				const pane = this.buildPaneSnippet(sendResult.content, ansiContent);
+				const workspace = await this.collectWorkspaceEvidence(this.sessionWorkingDir);
+				const test = this.extractTestEvidence(sendResult.content);
+				this.emitExecutionEvent({
+					runId,
+					phase: "settled",
+					toolName: name,
+					summary,
+					pane,
+					workspace,
+					test,
+					verification: this.buildVerificationEvidence(test),
+				});
 				return {
 					output: `[Agent ${sendStatus}] (${sendResult.analysis.detail})\n${sendResult.content}`,
 					terminal: false,
@@ -756,9 +988,21 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				}
 				const value = args.value as string;
 				const summary = args.summary as string;
+				const runId = this.createExecutionRunId(name);
 
 				// Broadcast agent update with summary
 				this.broadcaster.broadcast({ type: "agent_update", summary });
+				this.emitExecutionEvent({
+					runId,
+					phase: "planned",
+					toolName: name,
+					summary,
+					workspace: {
+						workingDir: this.sessionWorkingDir,
+						available: false,
+						changedFiles: [],
+					},
+				});
 
 				const respondPreHash = await this.stateDetector.captureHash(this.paneTarget);
 				await this.adapter.sendResponse(this.bridge, this.paneTarget, value);
@@ -767,6 +1011,20 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					isAborted: () => this.signalRouter.isStopRequested(),
 				});
 				const respondStatus = respondResult.timedOut ? "timeout" : respondResult.analysis.status;
+				const ansiContent = await this.captureAnsiPaneContent();
+				const pane = this.buildPaneSnippet(respondResult.content, ansiContent);
+				const workspace = await this.collectWorkspaceEvidence(this.sessionWorkingDir);
+				const test = this.extractTestEvidence(respondResult.content);
+				this.emitExecutionEvent({
+					runId,
+					phase: "settled",
+					toolName: name,
+					summary,
+					pane,
+					workspace,
+					test,
+					verification: this.buildVerificationEvidence(test),
+				});
 				return {
 					output: `[Agent ${respondStatus}] (${respondResult.analysis.detail})\n${respondResult.content}`,
 					terminal: false,
@@ -892,6 +1150,20 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 							};
 						}
 					}
+					this.emitExecutionEvent({
+						runId: this.createExecutionRunId(name),
+						phase: "persisted",
+						toolName: name,
+						summary: `Wrote ${result.path}`,
+						workspace: {
+							workingDir: this.sessionWorkingDir,
+							available: false,
+							changedFiles: [],
+						},
+						persistence: this.createPersistenceEvidence({
+							memoryWrites: [result.path],
+						}),
+					});
 					return { output: `Written to ${result.path} successfully.`, terminal: false };
 				} catch (err: any) {
 					return { output: `Memory write error: ${err.message}`, terminal: false };
@@ -938,12 +1210,33 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				}
 
 				try {
+					const runId = this.createExecutionRunId(name);
+					this.emitExecutionEvent({
+						runId,
+						phase: "planned",
+						toolName: name,
+						summary: `Create session ${sessionName}`,
+						workspace: {
+							workingDir,
+							available: false,
+							changedFiles: [],
+						},
+					});
 					this.paneTarget = await this.adapter.launch(this.bridge, {
 						workingDir,
 						sessionName,
 					});
 					this.sessionWorkingDir = workingDir;
 					this.stateDetector.setCharacteristics(this.adapter.getCharacteristics());
+					const workspace = await this.collectWorkspaceEvidence(workingDir);
+					this.emitExecutionEvent({
+						runId,
+						phase: "settled",
+						toolName: name,
+						summary: `Session ${sessionName} created`,
+						workspace,
+						persistence: this.createPersistenceEvidence(),
+					});
 					logger.info(
 						"main-agent",
 						`Session created: ${sessionName}, pane: ${this.paneTarget}, cwd: ${workingDir}`,
@@ -977,13 +1270,50 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					return { output: "Error: No active session.", terminal: false };
 				}
 				const exitSummary = args.summary as string;
+				const runId = this.createExecutionRunId(name);
 				this.broadcaster.broadcast({ type: "agent_update", summary: exitSummary });
+				this.emitExecutionEvent({
+					runId,
+					phase: "planned",
+					toolName: name,
+					summary: exitSummary,
+					workspace: {
+						workingDir: this.sessionWorkingDir,
+						available: false,
+						changedFiles: [],
+					},
+				});
 
 				if (!this.adapter.exitAgent) {
 					return { output: "Error: Current adapter does not support exitAgent.", terminal: false };
 				}
 
 				const exitResult = await this.adapter.exitAgent(this.bridge, this.paneTarget);
+				const ansiContent = await this.captureAnsiPaneContent();
+				const pane = this.buildPaneSnippet(exitResult.content, ansiContent);
+				const workspace = await this.collectWorkspaceEvidence(this.sessionWorkingDir);
+				const test = this.extractTestEvidence(exitResult.content);
+				this.emitExecutionEvent({
+					runId,
+					phase: "settled",
+					toolName: name,
+					summary: exitSummary,
+					pane,
+					workspace,
+					test,
+					verification: this.buildVerificationEvidence(test),
+				});
+				this.emitExecutionEvent({
+					runId,
+					phase: "persisted",
+					toolName: name,
+					summary: exitSummary,
+					workspace,
+					persistence: this.createPersistenceEvidence({
+						sessionResumeId: exitResult.sessionId,
+						sessionResumable: Boolean(exitResult.sessionId),
+					}),
+				});
 				const parts = [`[Agent exited]\n${exitResult.content}`];
 				if (exitResult.sessionId) {
 					parts.push(`\nSession ID: ${exitResult.sessionId}`);

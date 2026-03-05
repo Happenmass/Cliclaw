@@ -16,6 +16,7 @@ import { MemoryStore } from "./memory/store.js";
 import { syncMemoryFiles } from "./memory/sync.js";
 import { ConversationStore } from "./persistence/conversation-store.js";
 import { ChatBroadcaster } from "./server/chat-broadcaster.js";
+import { ExecutionEventStore } from "./server/execution-events.js";
 import { CommandRegistry } from "./server/command-registry.js";
 import { startServer } from "./server/index.js";
 import { discoverSkills } from "./skills/discovery.js";
@@ -275,6 +276,7 @@ async function main(): Promise<void> {
 
 	// Initialize ChatBroadcaster
 	const broadcaster = new ChatBroadcaster();
+	const executionEventStore = new ExecutionEventStore();
 
 	// Initialize ContextManager with conversation persistence
 	const contextManager = new ContextManager({
@@ -337,6 +339,7 @@ async function main(): Promise<void> {
 		bridge,
 		stateDetector,
 		broadcaster,
+		executionEventStore,
 		memoryStore,
 		syncMemory,
 		embeddingProvider,
@@ -389,6 +392,7 @@ async function main(): Promise<void> {
 		conversationStore,
 		broadcaster,
 		commandRegistry,
+		executionEventStore,
 	});
 
 	// ─── Graceful Shutdown ──────────────────────────────
