@@ -33,11 +33,20 @@ npm link
 ## Quick Start
 
 ```bash
-# Start the server (default port 3120)
+# Start the server in foreground (default port 3120)
 clipilot
 
 # Open the chat UI in your browser
 open http://localhost:3120
+
+# Start the server in background (daemon mode)
+clipilot start
+
+# If already running, start prints the existing URL again
+clipilot start
+
+# Stop the background server
+clipilot stop
 
 # Start with a specific port
 clipilot --port 8080
@@ -46,7 +55,9 @@ clipilot --port 8080
 clipilot -p openai -m gpt-4o
 ```
 
-Once the server is running, open `http://localhost:3120` in your browser. You'll see a chat interface where you can:
+In background mode, CLIPilot writes logs to `~/.clipilot/logs/server.log` and runtime state to `~/.clipilot/server-state.json`.
+
+Once the server is running, open the printed URL (default `http://localhost:3120`) in your browser. You'll see a chat interface where you can:
 
 - **Chat naturally** — Ask questions, discuss code, get explanations
 - **Assign tasks** — "Add JWT authentication to this Express app" — the agent will work autonomously
@@ -85,11 +96,15 @@ Your conversation persists in SQLite — restart the server and pick up where yo
 ## CLI Options
 
 ```
-clipilot [options]              Start the chat server (default)
-clipilot serve [options]        Start the chat server explicitly
+clipilot [options]              Start the chat server in foreground (default)
+clipilot serve [options]        Start the chat server in foreground explicitly
+clipilot start [options]        Start the chat server in background
+clipilot stop                   Stop the background server
 
 Subcommands:
-  serve                   Start the chat server (default behavior)
+  serve                   Start the chat server in foreground (default behavior)
+  start                   Start the chat server in background (daemon mode)
+  stop                    Stop the background server
   init                    Initialize project-level skills and prompts directories
   remember <text>         Save a note to project memory
   config                  Open configuration TUI
@@ -100,6 +115,7 @@ Options:
   -p, --provider <name>   LLM provider
   -m, --model <id>        LLM model ID
   --base-url <url>        Custom API base URL
+  --host <host>           Bind address (default: 127.0.0.1)
   --port <number>         Server port (default: 3120)
   --list-providers        List all available LLM providers
   --cwd <path>            Working directory (default: current)
