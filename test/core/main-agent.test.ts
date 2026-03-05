@@ -187,7 +187,7 @@ describe("MainAgent State Machine", () => {
 	let mockBridge: ReturnType<typeof createMockBridge>;
 	let mockDetector: ReturnType<typeof createMockStateDetector>;
 
-	function setupAgent(responses: LLMStreamEvent[][]) {
+	function setupAgent(responses: LLMStreamEvent[][], overrides: Record<string, any> = {}) {
 		mockCtx = createMockContextManager();
 		mockRouter = createMockSignalRouter();
 		mockBroadcaster = createMockBroadcaster();
@@ -205,6 +205,7 @@ describe("MainAgent State Machine", () => {
 			bridge: mockBridge,
 			stateDetector: mockDetector,
 			broadcaster: mockBroadcaster,
+			...overrides,
 		});
 	}
 
@@ -399,6 +400,46 @@ describe("MainAgent State Machine", () => {
 				summary: "Adding JWT auth",
 			});
 		});
+
+		it("should broadcast execution_event evidence for create_session and send_to_agent", async () => {
+			const agent = setupAgent([
+				toolCallResponse("create_session", {}, "tc0"),
+				toolCallResponse("send_to_agent", { prompt: "add auth", summary: "Adding JWT auth" }, "tc1"),
+				toolCallResponse("mark_complete", { summary: "Done" }, "tc2"),
+			]);
+
+			await agent.handleMessage("add auth");
+
+			const executionEvents = mockBroadcaster.broadcast.mock.calls
+				.map((call: any) => call[0])
+				.filter((message: any) => message.type === "execution_event");
+
+			expect(executionEvents.length).toBeGreaterThanOrEqual(4);
+			expect(executionEvents).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						type: "execution_event",
+						event: expect.objectContaining({
+							toolName: "create_session",
+							phase: "planned",
+						}),
+					}),
+					expect.objectContaining({
+						type: "execution_event",
+						event: expect.objectContaining({
+							toolName: "send_to_agent",
+							phase: "settled",
+							pane: expect.objectContaining({
+								content: expect.stringContaining("> task done"),
+							}),
+							workspace: expect.objectContaining({
+								workingDir: expect.any(String),
+							}),
+						}),
+					}),
+				]),
+			);
+		});
 	});
 
 	describe("stopRequested between rounds", () => {
@@ -545,6 +586,35 @@ describe("MainAgent State Machine", () => {
 			expect(agent.state).toBe("idle");
 		});
 
+		it("should broadcast persisted execution evidence with session id", async () => {
+			const agent = setupAgent([
+				toolCallResponse("exit_agent", { summary: "Exiting to save session" }),
+				textResponse("Agent exited successfully."),
+			]);
+			agent.setPaneTarget("test:0.0");
+
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({
+				content: "Resume this session with:\nclaude --resume abc-123",
+				sessionId: "abc-123",
+			});
+
+			await agent.handleMessage("exit agent");
+
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: "execution_event",
+					event: expect.objectContaining({
+						toolName: "exit_agent",
+						phase: "persisted",
+						persistence: expect.objectContaining({
+							sessionResumeId: "abc-123",
+							sessionResumable: true,
+						}),
+					}),
+				}),
+			);
+		});
+
 		it("should return error when no active session", async () => {
 			const agent = setupAgent([
 				toolCallResponse("exit_agent", { summary: "Exiting" }),
@@ -571,6 +641,36 @@ describe("MainAgent State Machine", () => {
 			await agent.handleMessage("exit agent");
 
 			expect(agent.state).toBe("idle");
+		});
+	});
+
+	describe("memory_write evidence", () => {
+		it("should broadcast persisted execution evidence after memory_write", async () => {
+			const memoryStore = {
+				write: vi.fn().mockResolvedValue({ path: "memory/core.md" }),
+			} as any;
+			const agent = setupAgent(
+				[
+					toolCallResponse("memory_write", { path: "memory/core.md", content: "# note" }),
+					textResponse("Saved."),
+				],
+				{ memoryStore },
+			);
+
+			await agent.handleMessage("save memory");
+
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: "execution_event",
+					event: expect.objectContaining({
+						toolName: "memory_write",
+						phase: "persisted",
+						persistence: expect.objectContaining({
+							memoryWrites: ["memory/core.md"],
+						}),
+					}),
+				}),
+			);
 		});
 	});
 

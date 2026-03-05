@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { startServer, type ServerInstance } from "../../src/server/index.js";
 import { CommandRegistry } from "../../src/server/command-registry.js";
+import { ExecutionEventStore } from "../../src/server/execution-events.js";
 
 function createMainAgentMock() {
 	return {
@@ -84,6 +85,7 @@ describe("startServer", () => {
 			conversationStore: createConversationStoreMock(),
 			broadcaster: createBroadcasterMock(),
 			commandRegistry: new CommandRegistry(),
+			executionEventStore: new ExecutionEventStore(),
 		});
 
 		const unauthorized = await fetch(`http://127.0.0.1:${server.port}/api/status`);
@@ -114,6 +116,7 @@ describe("startServer", () => {
 			conversationStore: createConversationStoreMock(),
 			broadcaster: createBroadcasterMock(),
 			commandRegistry: new CommandRegistry(),
+			executionEventStore: new ExecutionEventStore(),
 		});
 
 		const unauthorizedWs = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
@@ -127,5 +130,44 @@ describe("startServer", () => {
 
 		await expect(waitForWsMessage(authorizedWs)).resolves.toBe(JSON.stringify({ type: "state", state: "idle" }));
 		authorizedWs.close();
+	});
+
+	it("should return recent execution events from the API", async () => {
+		const executionEventStore = new ExecutionEventStore();
+		executionEventStore.add({
+			id: "evt-1",
+			runId: "run-1",
+			phase: "planned",
+			toolName: "send_to_agent",
+			summary: "Prompting agent",
+			createdAt: Date.now(),
+		});
+
+		server = await startServer({
+			host: "127.0.0.1",
+			port: 0,
+			mainAgent: createMainAgentMock(),
+			signalRouter: createSignalRouterMock(),
+			contextManager: createContextManagerMock(),
+			conversationStore: createConversationStoreMock(),
+			broadcaster: createBroadcasterMock(),
+			commandRegistry: new CommandRegistry(),
+			executionEventStore,
+		});
+
+		const landing = await fetch(`http://127.0.0.1:${server.port}/`);
+		const cookie = getCookieHeader(landing);
+		const response = await fetch(`http://127.0.0.1:${server.port}/api/execution-events`, {
+			headers: { Cookie: cookie },
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual([
+			expect.objectContaining({
+				id: "evt-1",
+				runId: "run-1",
+				toolName: "send_to_agent",
+			}),
+		]);
 	});
 });
