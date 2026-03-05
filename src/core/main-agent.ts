@@ -22,6 +22,7 @@ import type {
 	ExecutionWorkspaceEvidence,
 } from "../server/execution-events.js";
 import { MessageQueue } from "../server/message-queue.js";
+import type { UiEvent, UiEventStore, UiEventType } from "../server/ui-events.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
@@ -265,6 +266,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private stateDetector: StateDetector;
 	private broadcaster: ChatBroadcaster;
 	private executionEventStore: ExecutionEventStore | null = null;
+	private uiEventStore: UiEventStore | null = null;
 	private messageQueue = new MessageQueue();
 	private pendingUserMessages: string[] = [];
 	private isDrainingUserMessages = false;
@@ -297,6 +299,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		stateDetector: StateDetector;
 		broadcaster: ChatBroadcaster;
 		executionEventStore?: ExecutionEventStore;
+		uiEventStore?: UiEventStore;
 		memoryStore?: MemoryStore;
 		syncMemory?: () => Promise<void>;
 		embeddingProvider?: EmbeddingProvider | null;
@@ -313,6 +316,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.stateDetector = opts.stateDetector;
 		this.broadcaster = opts.broadcaster;
 		this.executionEventStore = opts.executionEventStore ?? null;
+		this.uiEventStore = opts.uiEventStore ?? null;
 		this.memoryStore = opts.memoryStore ?? null;
 		this.syncMemory = opts.syncMemory ?? null;
 		this.embeddingProvider = opts.embeddingProvider ?? null;
@@ -693,6 +697,18 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		return completeEvent;
 	}
 
+	private emitUiEvent(type: UiEventType, summary: string): UiEvent {
+		const event: UiEvent = {
+			id: randomUUID(),
+			type,
+			summary,
+			createdAt: Date.now(),
+		};
+		this.uiEventStore?.add(event);
+		this.broadcaster.broadcast({ type, summary });
+		return event;
+	}
+
 	private createExecutionRunId(toolName: string): string {
 		return `${toolName}-${randomUUID()}`;
 	}
@@ -941,7 +957,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				const runId = this.createExecutionRunId(name);
 
 				// Broadcast agent update with summary
-				this.broadcaster.broadcast({ type: "agent_update", summary });
+				this.emitUiEvent("agent_update", summary);
 				this.emitExecutionEvent({
 					runId,
 					phase: "planned",
@@ -991,7 +1007,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				const runId = this.createExecutionRunId(name);
 
 				// Broadcast agent update with summary
-				this.broadcaster.broadcast({ type: "agent_update", summary });
+				this.emitUiEvent("agent_update", summary);
 				this.emitExecutionEvent({
 					runId,
 					phase: "planned",
@@ -1271,7 +1287,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				}
 				const exitSummary = args.summary as string;
 				const runId = this.createExecutionRunId(name);
-				this.broadcaster.broadcast({ type: "agent_update", summary: exitSummary });
+				this.emitUiEvent("agent_update", exitSummary);
 				this.emitExecutionEvent({
 					runId,
 					phase: "planned",
@@ -1332,7 +1348,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				// Throttled broadcast: emit tool_activity on 1st, 4th, 7th, ... call
 				this.execCommandBroadcastCount++;
 				if (this.execCommandBroadcastCount % 3 === 1) {
-					this.broadcaster.broadcast({ type: "tool_activity", summary: execSummary });
+					this.emitUiEvent("tool_activity", execSummary);
 				}
 
 				try {

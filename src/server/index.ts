@@ -13,6 +13,7 @@ import type { ChatBroadcaster } from "./chat-broadcaster.js";
 import type { CommandRegistry } from "./command-registry.js";
 import { CommandRouter } from "./command-router.js";
 import type { ExecutionEventStore } from "./execution-events.js";
+import { UiEventStore } from "./ui-events.js";
 import { handleWebSocket } from "./ws-handler.js";
 
 export interface ServerOptions {
@@ -25,6 +26,7 @@ export interface ServerOptions {
 	broadcaster: ChatBroadcaster;
 	commandRegistry: CommandRegistry;
 	executionEventStore: ExecutionEventStore;
+	uiEventStore?: UiEventStore;
 }
 
 export interface ServerInstance {
@@ -46,6 +48,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		broadcaster,
 		commandRegistry,
 		executionEventStore,
+		uiEventStore = new UiEventStore(),
 	} = opts;
 
 	const app = express();
@@ -72,7 +75,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 	// ─── REST API ───────────────────────────────────────
 	app.get("/api/history", (_req, res) => {
 		try {
-			const messages = conversationStore.loadMessages();
+			const messages = conversationStore.loadMessagesWithCreatedAt();
 			res.json(messages);
 		} catch (err: any) {
 			logger.error("server", `Failed to load history: ${err.message}`);
@@ -99,6 +102,12 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		res.json(executionEventStore.listRecent(limit));
 	});
 
+	app.get("/api/ui-events", (req, res) => {
+		const limitRaw = typeof req.query.limit === "string" ? Number.parseInt(req.query.limit, 10) : undefined;
+		const limit = Number.isFinite(limitRaw) ? limitRaw : 200;
+		res.json(uiEventStore.listRecent(limit));
+	});
+
 	// ─── HTTP server ────────────────────────────────────
 	const server = createServer(app);
 
@@ -112,6 +121,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		broadcaster,
 		commandRegistry,
 		executionEventStore,
+		uiEventStore,
 	});
 
 	wss.on("connection", (ws: WebSocket, req) => {

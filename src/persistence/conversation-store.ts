@@ -42,9 +42,13 @@ export class ConversationStore {
 	 * Deserializes JSON content back to MessageContent[].
 	 */
 	loadMessages(): LLMMessage[] {
+		return this.loadMessagesWithCreatedAt().map(({ createdAt: _createdAt, ...msg }) => msg);
+	}
+
+	loadMessagesWithCreatedAt(): Array<LLMMessage & { createdAt: number }> {
 		const rows = this.db
-			.prepare("SELECT role, content, tool_call_id FROM chat_messages ORDER BY id ASC")
-			.all() as Array<{ role: string; content: string; tool_call_id: string | null }>;
+			.prepare("SELECT role, content, tool_call_id, created_at FROM chat_messages ORDER BY id ASC")
+			.all() as Array<{ role: string; content: string; tool_call_id: string | null; created_at: number }>;
 
 		return rows.map((row) => {
 			let content: string | any[];
@@ -62,7 +66,11 @@ export class ConversationStore {
 			if (row.tool_call_id) {
 				msg.toolCallId = row.tool_call_id;
 			}
-			return msg;
+			const createdAt = row.created_at > 0 && row.created_at < 1_000_000_000_000 ? row.created_at * 1000 : row.created_at;
+			return {
+				...msg,
+				createdAt,
+			};
 		});
 	}
 

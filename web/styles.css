@@ -19,6 +19,7 @@
 	--border: #2a3754;
 	--input-bg: #182033;
 	--terminal-bg: #0b1020;
+	--execution-panel-width: 420px;
 }
 
 body {
@@ -30,6 +31,11 @@ body {
 	color: var(--text);
 	height: 100vh;
 	overflow: hidden;
+}
+
+body.resizing-execution-panel {
+	cursor: col-resize;
+	user-select: none;
 }
 
 #app {
@@ -90,15 +96,14 @@ body {
 #content {
 	flex: 1;
 	min-height: 0;
-	display: grid;
-	grid-template-columns: minmax(0, 1.1fr) minmax(320px, 420px);
-	gap: 18px;
+	position: relative;
 	padding: 18px;
 }
 
 /* ─── Messages Area ──────────────────────────────── */
 #messages {
 	min-height: 0;
+	height: 100%;
 	overflow-y: auto;
 	padding: 8px 8px 0;
 	display: flex;
@@ -192,6 +197,12 @@ body {
 
 /* ─── Execution Panel ────────────────────────────── */
 #execution-panel {
+	position: absolute;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: min(var(--execution-panel-width), 50%);
+	min-width: 320px;
 	min-height: 0;
 	display: flex;
 	flex-direction: column;
@@ -200,6 +211,71 @@ body {
 	border-radius: 20px;
 	overflow: hidden;
 	box-shadow: 0 24px 42px rgba(0, 0, 0, 0.22);
+	z-index: 10;
+}
+
+#execution-panel.execution-hidden {
+	display: none;
+}
+
+.execution-resize-handle {
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	width: 12px;
+	cursor: col-resize;
+	z-index: 2;
+}
+
+.execution-resize-handle::before {
+	content: "";
+	position: absolute;
+	left: 5px;
+	top: 18px;
+	bottom: 18px;
+	width: 2px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.12);
+	transition: background 0.15s;
+}
+
+#execution-panel:hover .execution-resize-handle::before,
+body.resizing-execution-panel .execution-resize-handle::before {
+	background: rgba(255, 107, 61, 0.6);
+}
+
+.execution-reopen-btn {
+	position: absolute;
+	top: 12px;
+	right: 12px;
+	height: 34px;
+	padding: 0 14px;
+	border-radius: 999px;
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	background: rgba(20, 27, 43, 0.95);
+	color: var(--text);
+	font-size: 12px;
+	font-weight: 700;
+	cursor: pointer;
+	display: none;
+	align-items: center;
+	justify-content: center;
+	box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+	z-index: 12;
+}
+
+.execution-reopen-btn.visible {
+	display: inline-flex;
+}
+
+.execution-reopen-btn:hover {
+	background: rgba(32, 44, 70, 0.95);
+}
+
+.execution-reopen-btn:focus-visible {
+	outline: 2px solid rgba(255, 107, 61, 0.65);
+	outline-offset: 2px;
 }
 
 .execution-panel-header {
@@ -212,6 +288,44 @@ body {
 	font-size: 15px;
 	font-weight: 700;
 	margin-bottom: 6px;
+}
+
+.execution-panel-header-top {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	margin-bottom: 6px;
+}
+
+.execution-panel-header-top h2 {
+	margin-bottom: 0;
+}
+
+.execution-header-btn {
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	background: rgba(255, 255, 255, 0.05);
+	color: var(--text);
+	border-radius: 9px;
+	height: 30px;
+	padding: 0 12px;
+	font-size: 12px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.execution-header-btn:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.12);
+}
+
+.execution-header-btn:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
+.execution-header-btn:focus-visible {
+	outline: 2px solid rgba(255, 107, 61, 0.65);
+	outline-offset: 2px;
 }
 
 .execution-panel-header p {
@@ -245,6 +359,11 @@ body {
 	margin-bottom: 12px;
 }
 
+.execution-card-headline {
+	flex: 1;
+	min-width: 0;
+}
+
 .execution-card-title {
 	font-size: 13px;
 	font-weight: 700;
@@ -258,6 +377,38 @@ body {
 	font-size: 12px;
 	line-height: 1.5;
 	color: var(--text-dim);
+}
+
+.execution-card-controls {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.execution-toggle {
+	width: 28px;
+	height: 28px;
+	border-radius: 8px;
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	background: rgba(255, 255, 255, 0.05);
+	color: var(--text);
+	cursor: pointer;
+	font-size: 14px;
+	line-height: 1;
+}
+
+.execution-toggle:hover {
+	background: rgba(255, 255, 255, 0.12);
+}
+
+.execution-toggle:focus-visible {
+	outline: 2px solid rgba(255, 107, 61, 0.65);
+	outline-offset: 2px;
+}
+
+.execution-card.collapsed .execution-card-header {
+	align-items: center;
+	margin-bottom: 0;
 }
 
 .execution-badge {
@@ -512,11 +663,26 @@ body {
 /* ─── Responsive ─────────────────────────────────── */
 @media (max-width: 980px) {
 	#content {
+		display: grid;
 		grid-template-columns: 1fr;
 		grid-template-rows: minmax(0, 1fr) minmax(260px, 34vh);
 	}
 
 	#messages {
 		padding-right: 0;
+	}
+
+	#execution-panel {
+		position: static;
+		width: auto;
+		min-width: 0;
+	}
+
+	.execution-resize-handle {
+		display: none;
+	}
+
+	.execution-reopen-btn {
+		display: none !important;
 	}
 }

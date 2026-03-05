@@ -1,7 +1,12 @@
 // ─── CLIPilot Chat UI ──────────────────────────────
 
 let messagesEl;
+let contentEl;
 let executionCardsEl;
+let executionPanelEl;
+let executionResizeHandleEl;
+let executionReopenBtn;
+let collapseAllExecutionBtn;
 let inputEl;
 let sendBtn;
 let statusDot;
@@ -15,7 +20,14 @@ let agentState = "idle";
 let commands = [];
 let activeIndex = -1;
 let isDropdownOpen = false;
+let isExecutionPanelResizing = false;
+let executionPanelHidden = false;
+let lastExecutionPanelWidth = 420;
 const executionRuns = new Map();
+const collapsedExecutionRuns = new Set();
+const EXECUTION_PANEL_DEFAULT_WIDTH = 420;
+const EXECUTION_PANEL_MIN_WIDTH = 320;
+const EXECUTION_PANEL_HIDE_THRESHOLD = 180;
 
 const ANSI_STYLES = {
 	30: "color:#1f2430",
@@ -137,6 +149,19 @@ function extractText(content) {
 	return "";
 }
 
+export function clampExecutionPanelWidth(width, minWidth, maxWidth) {
+	return Math.max(minWidth, Math.min(maxWidth, width));
+}
+
+export function getExecutionPanelWidthBounds(containerWidth, minWidth = EXECUTION_PANEL_MIN_WIDTH) {
+	const maxWidth = Math.max(minWidth, Math.floor(containerWidth / 2));
+	return { minWidth, maxWidth };
+}
+
+export function shouldHideExecutionPanel(rawWidth, hideThreshold = EXECUTION_PANEL_HIDE_THRESHOLD) {
+	return rawWidth <= hideThreshold;
+}
+
 export function mergeExecutionEventSnapshot(existing, event) {
 	const next = existing
 		? {
@@ -233,7 +258,7 @@ function renderPane(snapshot) {
 	`;
 }
 
-export function buildExecutionCardMarkup(snapshot) {
+export function buildExecutionCardMarkup(snapshot, collapsed = collapsedExecutionRuns.has(snapshot.runId)) {
 	const workspace = snapshot.workspace;
 	const changedFiles = workspace
 		? workspace.available
@@ -255,30 +280,41 @@ export function buildExecutionCardMarkup(snapshot) {
 			? `<div class="execution-meta-row"><span>Diff 统计</span><em>${escapeHtml(workspace.diffStat)}</em></div>`
 			: "";
 
+	const body = collapsed
+		? ""
+		: `
+			<div class="execution-card-body">
+				<section class="execution-section execution-meta">
+					<div class="execution-meta-row">
+						<span>目标目录</span>
+						<code>${escapeHtml(workspace ? workspace.workingDir : "未知")}</code>
+					</div>
+					${diffStatSummary}
+					${testSummary}
+					${verificationSummary}
+				</section>
+				<section class="execution-section">
+					<h3>改动文件</h3>
+					${changedFiles}
+				</section>
+				${diffSummary ? `<section class="execution-section"><h3>Diff 摘要</h3>${diffSummary}</section>` : ""}
+				${renderPersistence(snapshot)}
+				${renderPane(snapshot)}
+			</div>
+		`;
+
 	return `
 		<header class="execution-card-header">
-			<div>
+			<div class="execution-card-headline">
 				<div class="execution-card-title">${escapeHtml(snapshot.toolName)}</div>
-				${snapshot.summary ? `<div class="execution-card-summary">${escapeHtml(snapshot.summary)}</div>` : ""}
+				${!collapsed && snapshot.summary ? `<div class="execution-card-summary">${escapeHtml(snapshot.summary)}</div>` : ""}
 			</div>
-			<span class="execution-badge phase-${escapeHtml(snapshot.phase)}">${escapeHtml(phaseLabel(snapshot.phase))}</span>
+			<div class="execution-card-controls">
+				${!collapsed ? `<span class="execution-badge phase-${escapeHtml(snapshot.phase)}">${escapeHtml(phaseLabel(snapshot.phase))}</span>` : ""}
+				<button class="execution-toggle" type="button" data-run-id="${escapeHtml(snapshot.runId)}" aria-expanded="${String(!collapsed)}" title="${collapsed ? "展开" : "折叠"}">${collapsed ? "▸" : "▾"}</button>
+			</div>
 		</header>
-		<section class="execution-section execution-meta">
-			<div class="execution-meta-row">
-				<span>目标目录</span>
-				<code>${escapeHtml(workspace ? workspace.workingDir : "未知")}</code>
-			</div>
-			${diffStatSummary}
-			${testSummary}
-			${verificationSummary}
-		</section>
-		<section class="execution-section">
-			<h3>改动文件</h3>
-			${changedFiles}
-		</section>
-		${diffSummary ? `<section class="execution-section"><h3>Diff 摘要</h3>${diffSummary}</section>` : ""}
-		${renderPersistence(snapshot)}
-		${renderPane(snapshot)}
+		${body}
 	`;
 }
 
@@ -291,16 +327,46 @@ function renderExecutionCards() {
 
 	if (snapshots.length === 0) {
 		executionCardsEl.innerHTML = '<div class="execution-empty-state">最近还没有执行证据。</div>';
+		updateExecutionHeaderControls();
 		return;
 	}
 
 	executionCardsEl.innerHTML = "";
 	for (const snapshot of snapshots) {
+		const collapsed = collapsedExecutionRuns.has(snapshot.runId);
 		const article = document.createElement("article");
-		article.className = "execution-card";
-		article.innerHTML = buildExecutionCardMarkup(snapshot);
+		article.className = "execution-card" + (collapsed ? " collapsed" : "");
+		article.innerHTML = buildExecutionCardMarkup(snapshot, collapsed);
 		executionCardsEl.appendChild(article);
 	}
+	updateExecutionHeaderControls();
+}
+
+function toggleExecutionCardCollapse(runId) {
+	if (!runId) return;
+	if (collapsedExecutionRuns.has(runId)) {
+		collapsedExecutionRuns.delete(runId);
+	} else {
+		collapsedExecutionRuns.add(runId);
+	}
+	renderExecutionCards();
+}
+
+function collapseAllExecutionCards() {
+	for (const runId of executionRuns.keys()) {
+		collapsedExecutionRuns.add(runId);
+	}
+	renderExecutionCards();
+}
+
+function updateExecutionHeaderControls() {
+	if (!collapseAllExecutionBtn) return;
+	if (executionRuns.size === 0) {
+		collapseAllExecutionBtn.disabled = true;
+		return;
+	}
+
+	collapseAllExecutionBtn.disabled = executionRuns.size === collapsedExecutionRuns.size;
 }
 
 function upsertExecutionCard(event) {
@@ -311,7 +377,105 @@ function upsertExecutionCard(event) {
 
 function resetExecutionCards() {
 	executionRuns.clear();
+	collapsedExecutionRuns.clear();
 	renderExecutionCards();
+}
+
+function supportsFloatingExecutionPanel() {
+	return window.matchMedia("(min-width: 981px)").matches;
+}
+
+function updateExecutionPanelVisibilityControls() {
+	if (!executionPanelEl) return;
+	const hiddenInFloating = executionPanelHidden && supportsFloatingExecutionPanel();
+	executionPanelEl.classList.toggle("execution-hidden", hiddenInFloating);
+	if (executionReopenBtn) {
+		executionReopenBtn.classList.toggle("visible", hiddenInFloating);
+	}
+}
+
+function hideExecutionPanel() {
+	if (!executionPanelEl || executionPanelHidden) return;
+	if (supportsFloatingExecutionPanel()) {
+		const containerWidth = contentEl ? contentEl.getBoundingClientRect().width : window.innerWidth;
+		const bounds = getExecutionPanelWidthBounds(containerWidth);
+		const inlineWidth = Number.parseFloat(executionPanelEl.style.getPropertyValue("--execution-panel-width"));
+		const measuredWidth = Number.isFinite(inlineWidth) ? inlineWidth : executionPanelEl.getBoundingClientRect().width;
+		lastExecutionPanelWidth = clampExecutionPanelWidth(
+			measuredWidth || EXECUTION_PANEL_DEFAULT_WIDTH,
+			bounds.minWidth,
+			bounds.maxWidth,
+		);
+	}
+	executionPanelHidden = true;
+	updateExecutionPanelVisibilityControls();
+}
+
+function showExecutionPanel() {
+	if (!executionPanelEl) return;
+	executionPanelHidden = false;
+	updateExecutionPanelVisibilityControls();
+	applyExecutionPanelWidth(lastExecutionPanelWidth);
+}
+
+function applyExecutionPanelWidth(nextWidth) {
+	if (!contentEl || !executionPanelEl || !supportsFloatingExecutionPanel()) return;
+	const bounds = getExecutionPanelWidthBounds(contentEl.getBoundingClientRect().width);
+	const width = clampExecutionPanelWidth(nextWidth, bounds.minWidth, bounds.maxWidth);
+	lastExecutionPanelWidth = width;
+	executionPanelEl.style.setProperty("--execution-panel-width", `${width}px`);
+}
+
+function syncExecutionPanelWidth() {
+	if (!executionPanelEl) return;
+	if (!supportsFloatingExecutionPanel()) {
+		executionPanelHidden = false;
+		executionPanelEl.style.removeProperty("--execution-panel-width");
+		updateExecutionPanelVisibilityControls();
+		return;
+	}
+	updateExecutionPanelVisibilityControls();
+	if (executionPanelHidden) return;
+	const currentWidth =
+		Number.parseFloat(executionPanelEl.style.getPropertyValue("--execution-panel-width")) || lastExecutionPanelWidth;
+	applyExecutionPanelWidth(currentWidth);
+}
+
+function updateExecutionPanelWidthFromPointer(clientX) {
+	if (!contentEl) return;
+	const bounds = contentEl.getBoundingClientRect();
+	const width = bounds.right - clientX;
+	if (shouldHideExecutionPanel(width)) {
+		hideExecutionPanel();
+		stopExecutionPanelResize();
+		return;
+	}
+	applyExecutionPanelWidth(width);
+}
+
+function stopExecutionPanelResize() {
+	if (!isExecutionPanelResizing) return;
+	isExecutionPanelResizing = false;
+	document.body.classList.remove("resizing-execution-panel");
+}
+
+function handleExecutionPanelResizeMove(event) {
+	if (!isExecutionPanelResizing) return;
+	event.preventDefault();
+	updateExecutionPanelWidthFromPointer(event.clientX);
+}
+
+function startExecutionPanelResize(event) {
+	if (!supportsFloatingExecutionPanel() || executionPanelHidden) return;
+	event.preventDefault();
+	isExecutionPanelResizing = true;
+	document.body.classList.add("resizing-execution-panel");
+	updateExecutionPanelWidthFromPointer(event.clientX);
+}
+
+function reopenExecutionPanel() {
+	if (!supportsFloatingExecutionPanel()) return;
+	showExecutionPanel();
 }
 
 function connect() {
@@ -365,19 +529,63 @@ function setConnectionStatus(status) {
 }
 
 function loadHistory() {
-	fetch("/api/history")
-		.then(function (res) { return res.json(); })
-		.then(function (messages) {
+	Promise.all([
+		fetch("/api/history").then(function (res) { return res.json(); }),
+		fetch("/api/ui-events")
+			.then(function (res) { return res.json(); })
+			.catch(function () { return []; }),
+	])
+		.then(function ([messages, uiEvents]) {
 			messagesEl.innerHTML = "";
 			currentAssistantEl = null;
-			for (const msg of messages) {
-				if (msg.role === "user") {
-					const content = typeof msg.content === "string" ? msg.content : "[complex content]";
-					if (content.startsWith("[HUMAN]") || content.startsWith("[RESUME]")) continue;
-					addMessageBubble("user", content);
-				} else if (msg.role === "assistant") {
-					const text = extractText(msg.content);
-					if (text) addMessageBubble("assistant", text);
+			const entries = [];
+
+			for (let i = 0; i < messages.length; i++) {
+				const msg = messages[i];
+				const createdAt = Number.parseInt(String(msg.createdAt ?? i), 10);
+				entries.push({
+					kind: "chat",
+					createdAt: Number.isFinite(createdAt) ? createdAt : i,
+					index: i,
+					payload: msg,
+				});
+			}
+
+			for (let i = 0; i < uiEvents.length; i++) {
+				const event = uiEvents[i];
+				const createdAt = Number.parseInt(String(event.createdAt ?? messages.length + i), 10);
+				entries.push({
+					kind: "ui",
+					createdAt: Number.isFinite(createdAt) ? createdAt : messages.length + i,
+					index: i,
+					payload: event,
+				});
+			}
+
+			entries.sort(function (a, b) {
+				if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+				if (a.kind !== b.kind) return a.kind === "chat" ? -1 : 1;
+				return a.index - b.index;
+			});
+
+			for (const entry of entries) {
+				if (entry.kind === "chat") {
+					const msg = entry.payload;
+					if (msg.role === "user") {
+						const content = typeof msg.content === "string" ? msg.content : "[complex content]";
+						if (content.startsWith("[HUMAN]") || content.startsWith("[RESUME]")) continue;
+						addMessageBubble("user", content);
+					} else if (msg.role === "assistant") {
+						const text = extractText(msg.content);
+						if (text) addMessageBubble("assistant", text);
+					}
+					continue;
+				}
+
+				if (entry.payload.type === "agent_update") {
+					addMessageBubble("agent-update", entry.payload.summary);
+				} else if (entry.payload.type === "tool_activity") {
+					addMessageBubble("tool-activity", entry.payload.summary);
 				}
 			}
 			scrollToBottom();
@@ -581,7 +789,12 @@ function sendMessage() {
 
 function initDomReferences() {
 	messagesEl = document.getElementById("messages");
+	contentEl = document.getElementById("content");
 	executionCardsEl = document.getElementById("execution-cards");
+	executionPanelEl = document.getElementById("execution-panel");
+	executionResizeHandleEl = document.getElementById("execution-resize-handle");
+	executionReopenBtn = document.getElementById("execution-reopen-btn");
+	collapseAllExecutionBtn = document.getElementById("execution-collapse-all-btn");
 	inputEl = document.getElementById("input");
 	sendBtn = document.getElementById("send-btn");
 	statusDot = document.getElementById("status-dot");
@@ -592,6 +805,26 @@ function initDomReferences() {
 function initApp() {
 	initDomReferences();
 	renderExecutionCards();
+	syncExecutionPanelWidth();
+
+	executionCardsEl.addEventListener("click", function (event) {
+		const target = event.target instanceof Element ? event.target.closest(".execution-toggle") : null;
+		if (!target) return;
+		toggleExecutionCardCollapse(target.dataset.runId);
+	});
+	if (executionResizeHandleEl) {
+		executionResizeHandleEl.addEventListener("mousedown", startExecutionPanelResize);
+	}
+	if (collapseAllExecutionBtn) {
+		collapseAllExecutionBtn.addEventListener("click", collapseAllExecutionCards);
+	}
+	if (executionReopenBtn) {
+		executionReopenBtn.addEventListener("click", reopenExecutionPanel);
+	}
+	document.addEventListener("mousemove", handleExecutionPanelResizeMove);
+	document.addEventListener("mouseup", stopExecutionPanelResize);
+	window.addEventListener("resize", syncExecutionPanelWidth);
+	window.addEventListener("blur", stopExecutionPanelResize);
 
 	document.addEventListener("click", function (e) {
 		if (!dropdownEl.contains(e.target) && e.target !== inputEl) {

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildExecutionCardMarkup, mergeExecutionEventSnapshot, renderAnsiToHtml } from "../../web/app.js";
+import {
+	buildExecutionCardMarkup,
+	clampExecutionPanelWidth,
+	getExecutionPanelWidthBounds,
+	mergeExecutionEventSnapshot,
+	renderAnsiToHtml,
+	shouldHideExecutionPanel,
+} from "../../web/app.js";
 
 describe("execution evidence helpers", () => {
 	it("merges execution events by preserving later evidence", () => {
@@ -66,5 +73,46 @@ describe("execution evidence helpers", () => {
 		expect(markup).toContain("memory/core.md");
 		expect(markup).toContain("Diff 统计");
 		expect(markup).toContain("对话会持久化");
+	});
+
+	it("builds collapsed execution card markup with title only", () => {
+		const markup = buildExecutionCardMarkup(
+			{
+				runId: "run-2",
+				toolName: "send_to_agent",
+				phase: "planned",
+				summary: "Prompting agent",
+				workspace: {
+					workingDir: "/tmp/demo",
+					available: true,
+					changedFiles: ["src/main.ts"],
+					diffSummary: ["src/main.ts | 5 +++++"],
+				},
+			},
+			true,
+		);
+
+		expect(markup).toContain("send_to_agent");
+		expect(markup).toContain('aria-expanded="false"');
+		expect(markup).not.toContain("Prompting agent");
+		expect(markup).not.toContain("目标目录");
+		expect(markup).not.toContain("改动文件");
+	});
+
+	it("clamps execution panel width within min/max bounds", () => {
+		expect(clampExecutionPanelWidth(200, 320, 640)).toBe(320);
+		expect(clampExecutionPanelWidth(480, 320, 640)).toBe(480);
+		expect(clampExecutionPanelWidth(900, 320, 640)).toBe(640);
+	});
+
+	it("limits floating execution panel max width to half of container", () => {
+		expect(getExecutionPanelWidthBounds(1200)).toEqual({ minWidth: 320, maxWidth: 600 });
+		expect(getExecutionPanelWidthBounds(500)).toEqual({ minWidth: 320, maxWidth: 320 });
+	});
+
+	it("hides floating panel after dragging width under threshold", () => {
+		expect(shouldHideExecutionPanel(179)).toBe(true);
+		expect(shouldHideExecutionPanel(180)).toBe(true);
+		expect(shouldHideExecutionPanel(181)).toBe(false);
 	});
 });

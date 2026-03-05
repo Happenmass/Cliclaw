@@ -3,6 +3,7 @@ import { WebSocket } from "ws";
 import { startServer, type ServerInstance } from "../../src/server/index.js";
 import { CommandRegistry } from "../../src/server/command-registry.js";
 import { ExecutionEventStore } from "../../src/server/execution-events.js";
+import { UiEventStore } from "../../src/server/ui-events.js";
 
 function createMainAgentMock() {
 	return {
@@ -30,6 +31,7 @@ function createSignalRouterMock() {
 function createConversationStoreMock() {
 	return {
 		loadMessages: () => [],
+		loadMessagesWithCreatedAt: () => [],
 		getMessageCount: () => 0,
 	} as any;
 }
@@ -167,6 +169,44 @@ describe("startServer", () => {
 				id: "evt-1",
 				runId: "run-1",
 				toolName: "send_to_agent",
+			}),
+		]);
+	});
+
+	it("should return recent ui summary events from the API", async () => {
+		const uiEventStore = new UiEventStore();
+		uiEventStore.add({
+			id: "ui-1",
+			type: "agent_update",
+			summary: "正在让 agent 修改 X",
+			createdAt: Date.now(),
+		});
+
+		server = await startServer({
+			host: "127.0.0.1",
+			port: 0,
+			mainAgent: createMainAgentMock(),
+			signalRouter: createSignalRouterMock(),
+			contextManager: createContextManagerMock(),
+			conversationStore: createConversationStoreMock(),
+			broadcaster: createBroadcasterMock(),
+			commandRegistry: new CommandRegistry(),
+			executionEventStore: new ExecutionEventStore(),
+			uiEventStore,
+		});
+
+		const landing = await fetch(`http://127.0.0.1:${server.port}/`);
+		const cookie = getCookieHeader(landing);
+		const response = await fetch(`http://127.0.0.1:${server.port}/api/ui-events`, {
+			headers: { Cookie: cookie },
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual([
+			expect.objectContaining({
+				id: "ui-1",
+				type: "agent_update",
+				summary: "正在让 agent 修改 X",
 			}),
 		]);
 	});

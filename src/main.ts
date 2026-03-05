@@ -21,6 +21,7 @@ import { ChatBroadcaster } from "./server/chat-broadcaster.js";
 import { ExecutionEventStore } from "./server/execution-events.js";
 import { CommandRegistry } from "./server/command-registry.js";
 import { startServer } from "./server/index.js";
+import { UiEventStore } from "./server/ui-events.js";
 import { discoverSkills } from "./skills/discovery.js";
 import { filterSkills } from "./skills/filter.js";
 import { buildCapabilitiesSummary } from "./skills/injector.js";
@@ -501,7 +502,8 @@ async function main(): Promise<void> {
 
 	// Initialize ChatBroadcaster
 	const broadcaster = new ChatBroadcaster();
-	const executionEventStore = new ExecutionEventStore();
+	const executionEventStore = new ExecutionEventStore({ db: memoryStore.getDb() });
+	const uiEventStore = new UiEventStore({ db: memoryStore.getDb() });
 
 	// Initialize ContextManager with conversation persistence
 	const contextManager = new ContextManager({
@@ -565,6 +567,7 @@ async function main(): Promise<void> {
 		stateDetector,
 		broadcaster,
 		executionEventStore,
+		uiEventStore,
 		memoryStore,
 		syncMemory,
 		embeddingProvider,
@@ -618,6 +621,7 @@ async function main(): Promise<void> {
 		broadcaster,
 		commandRegistry,
 		executionEventStore,
+		uiEventStore,
 	});
 
 	if (isDaemonProcess) {
