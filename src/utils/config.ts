@@ -85,7 +85,7 @@ const DEFAULT_CONFIG: CLIPilotConfig = {
 	debug: false,
 	llm: {
 		provider: "anthropic",
-		model: "claude-sonnet-4-5-20250929",
+		model: "claude-sonnet-4-6",
 	},
 	stateDetector: {
 		pollIntervalMs: 2000,

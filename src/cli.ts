@@ -97,7 +97,7 @@ Examples:
   clipilot stop                                       # Stop background server
   clipilot --host 0.0.0.0 --port 3120                 # Expose server on all interfaces
   clipilot --port 8080                                # Start server on port 8080
-  clipilot -p openai -m gpt-4o                        # Start with specific LLM
+  clipilot -p openai -m gpt-5.4                        # Start with specific LLM
   clipilot remember "This project uses PostgreSQL"    # Save a memory note
 
 Environment variables:

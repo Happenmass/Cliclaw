@@ -9,8 +9,8 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		protocol: "openai-compatible",
 		baseUrl: "https://api.openai.com/v1",
 		apiKeyEnvVar: "OPENAI_API_KEY",
-		defaultModel: "gpt-4o",
-		models: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "o3", "o4-mini"],
+		defaultModel: "gpt-5.4",
+		models: ["gpt-5.4", "gpt-5.2", "gpt-4.1", "gpt-4.1-mini", "o3", "o3-pro", "o4-mini"],
 	},
 
 	// ─── Anthropic ───────────────────────────────────────
@@ -20,8 +20,8 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		protocol: "anthropic",
 		baseUrl: "https://api.anthropic.com",
 		apiKeyEnvVar: "ANTHROPIC_API_KEY",
-		defaultModel: "claude-sonnet-4-5-20250929",
-		models: ["claude-opus-4-6", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001"],
+		defaultModel: "claude-sonnet-4-6",
+		models: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
 	},
 
 	// ─── OpenRouter ──────────────────────────────────────
@@ -31,13 +31,13 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		protocol: "openai-compatible",
 		baseUrl: "https://openrouter.ai/api/v1",
 		apiKeyEnvVar: "OPENROUTER_API_KEY",
-		defaultModel: "anthropic/claude-sonnet-4-5-20250929",
+		defaultModel: "openai/gpt-5.4",
 		models: [
 			"anthropic/claude-opus-4-6",
-			"anthropic/claude-sonnet-4-5-20250929",
-			"openai/gpt-4o",
+			"anthropic/claude-sonnet-4-6",
+			"openai/gpt-5.4",
 			"google/gemini-2.5-flash",
-			"deepseek/deepseek-chat-v3-0324",
+			"deepseek/deepseek-chat",
 		],
 	},
 
@@ -48,8 +48,8 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		protocol: "openai-compatible",
 		baseUrl: "https://api.moonshot.cn/v1",
 		apiKeyEnvVar: "MOONSHOT_API_KEY",
-		defaultModel: "moonshot-v1-auto",
-		models: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", "moonshot-v1-auto"],
+		defaultModel: "kimi-k2.5",
+		models: ["kimi-k2.5", "kimi-k2-thinking", "kimi-k2-thinking-turbo", "moonshot-v1-auto"],
 	},
 
 	// ─── MiniMax ─────────────────────────────────────────
@@ -59,8 +59,8 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		protocol: "openai-compatible",
 		baseUrl: "https://api.minimax.chat/v1",
 		apiKeyEnvVar: "MINIMAX_API_KEY",
-		defaultModel: "MiniMax-Text-01",
-		models: ["MiniMax-Text-01", "abab6.5s-chat"],
+		defaultModel: "MiniMax-M2.5",
+		models: ["MiniMax-M2.5", "MiniMax-M2.5-highspeed", "MiniMax-M2.1"],
 	},
 
 	// ─── DeepSeek ────────────────────────────────────────
@@ -82,7 +82,12 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		baseUrl: "https://api.groq.com/openai/v1",
 		apiKeyEnvVar: "GROQ_API_KEY",
 		defaultModel: "llama-3.3-70b-versatile",
-		models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
+		models: [
+			"llama-3.3-70b-versatile",
+			"llama-3.1-8b-instant",
+			"meta-llama/llama-4-scout-17b-16e-instruct",
+			"qwen/qwen3-32b",
+		],
 	},
 
 	// ─── Together AI ─────────────────────────────────────
@@ -92,7 +97,7 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		protocol: "openai-compatible",
 		baseUrl: "https://api.together.xyz/v1",
 		apiKeyEnvVar: "TOGETHER_API_KEY",
-		defaultModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+		defaultModel: "meta-llama/Llama-4-Scout-17B-16E-Instruct",
 	},
 
 	// ─── xAI (Grok) ─────────────────────────────────────
@@ -102,8 +107,8 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		protocol: "openai-compatible",
 		baseUrl: "https://api.x.ai/v1",
 		apiKeyEnvVar: "XAI_API_KEY",
-		defaultModel: "grok-3",
-		models: ["grok-3", "grok-3-mini"],
+		defaultModel: "grok-4-1-fast-reasoning",
+		models: ["grok-4-1-fast-reasoning", "grok-4-1-fast-non-reasoning", "grok-4-fast-reasoning", "grok-3", "grok-3-mini"],
 	},
 
 	// ─── Google Gemini (OpenAI compat) ───────────────────
@@ -114,7 +119,7 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
 		apiKeyEnvVar: "GEMINI_API_KEY",
 		defaultModel: "gemini-2.5-flash",
-		models: ["gemini-2.5-flash", "gemini-2.5-pro"],
+		models: ["gemini-2.5-flash", "gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"],
 	},
 
 	// ─── Mistral ─────────────────────────────────────────
@@ -125,7 +130,7 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		baseUrl: "https://api.mistral.ai/v1",
 		apiKeyEnvVar: "MISTRAL_API_KEY",
 		defaultModel: "mistral-large-latest",
-		models: ["mistral-large-latest", "mistral-small-latest", "codestral-latest"],
+		models: ["mistral-large-latest", "mistral-small-latest", "codestral-latest", "magistral-medium-latest", "devstral-2-25-12"],
 	},
 
 	// ─── Ollama (local) ──────────────────────────────────
@@ -135,7 +140,7 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		protocol: "openai-compatible",
 		baseUrl: "http://localhost:11434/v1",
 		apiKeyEnvVar: "OLLAMA_API_KEY", // Usually "ollama" or empty
-		defaultModel: "llama3.3",
+		defaultModel: "llama4",
 	},
 ];
 

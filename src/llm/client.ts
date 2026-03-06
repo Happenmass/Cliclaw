@@ -15,12 +15,12 @@ import type {
  * Unified LLM client that dispatches to the correct provider based on protocol.
  *
  * Usage:
- *   const client = new LLMClient({ provider: "openai", model: "gpt-4o" });
- *   const client = new LLMClient({ provider: "anthropic", model: "claude-sonnet-4-5-20250929" });
- *   const client = new LLMClient({ provider: "openrouter", model: "anthropic/claude-opus-4-6" });
- *   const client = new LLMClient({ provider: "moonshot", model: "moonshot-v1-auto" });
+ *   const client = new LLMClient({ provider: "openai", model: "gpt-5.4" });
+ *   const client = new LLMClient({ provider: "anthropic", model: "claude-sonnet-4-6" });
+ *   const client = new LLMClient({ provider: "openrouter", model: "openai/gpt-5.4" });
+ *   const client = new LLMClient({ provider: "moonshot", model: "kimi-k2.5" });
  *   const client = new LLMClient({ provider: "deepseek" });   // uses default model
- *   const client = new LLMClient({ provider: "ollama", model: "llama3.3" });
+ *   const client = new LLMClient({ provider: "ollama", model: "llama4" });
  *
  * Custom provider:
  *   const client = new LLMClient({ provider: "my-corp", baseUrl: "https://llm.my-corp.com/v1", model: "internal-v2" });
