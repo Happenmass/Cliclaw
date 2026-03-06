@@ -139,7 +139,7 @@ clipilot config
   "debug": false,
   "llm": {
     "provider": "anthropic",
-    "model": "claude-sonnet-4-5-20250929",
+    "model": "claude-sonnet-4-6",
     "apiKey": "sk-..."
   },
   "memory": {
@@ -154,18 +154,18 @@ clipilot config
 
 | Provider | Models | Env Variable |
 |----------|--------|-------------|
-| OpenAI | gpt-4o, gpt-4o-mini, gpt-4.1, o3, o4-mini | `OPENAI_API_KEY` |
-| Anthropic | claude-opus-4-6, claude-sonnet-4-5, claude-haiku-4-5 | `ANTHROPIC_API_KEY` |
-| OpenRouter | Multi-provider aggregator | `OPENROUTER_API_KEY` |
+| OpenAI | gpt-5.4, gpt-5.2, gpt-4.1, o3, o3-pro, o4-mini | `OPENAI_API_KEY` |
+| Anthropic | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5 | `ANTHROPIC_API_KEY` |
+| OpenRouter | Multi-provider aggregator (default: openai/gpt-5.4) | `OPENROUTER_API_KEY` |
 | DeepSeek | deepseek-chat, deepseek-reasoner | `DEEPSEEK_API_KEY` |
-| Google Gemini | gemini-2.5-flash, gemini-2.5-pro | `GEMINI_API_KEY` |
-| Groq | llama-3.3-70b-versatile | `GROQ_API_KEY` |
-| Mistral | mistral-large-latest, codestral-latest | `MISTRAL_API_KEY` |
-| xAI (Grok) | grok-3, grok-3-mini | `XAI_API_KEY` |
-| Together AI | Llama models | `TOGETHER_API_KEY` |
-| Moonshot (Kimi) | moonshot-v1-auto | `MOONSHOT_API_KEY` |
-| MiniMax | MiniMax-Text-01 | `MINIMAX_API_KEY` |
-| Ollama (Local) | llama3.3 (local models) | — |
+| Google Gemini | gemini-2.5-flash, gemini-3-flash-preview, gemini-3.1-pro-preview | `GEMINI_API_KEY` |
+| Groq | llama-3.3-70b, llama-4-scout, qwen3-32b | `GROQ_API_KEY` |
+| Mistral | mistral-large-latest, codestral-latest, magistral-medium-latest | `MISTRAL_API_KEY` |
+| xAI (Grok) | grok-4-1-fast-reasoning, grok-4, grok-3 | `XAI_API_KEY` |
+| Together AI | Llama 4 Scout | `TOGETHER_API_KEY` |
+| Moonshot (Kimi) | kimi-k2.5, kimi-k2-thinking | `MOONSHOT_API_KEY` |
+| MiniMax | MiniMax-M2.5, MiniMax-M2.1 | `MINIMAX_API_KEY` |
+| Ollama (Local) | llama4 (local models) | — |
 
 ## Development
 

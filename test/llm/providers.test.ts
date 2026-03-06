@@ -85,12 +85,12 @@ describe("LLMClient creation", () => {
 	it("should create an openai-compatible client", () => {
 		const client = new LLMClient({
 			provider: "openai",
-			model: "gpt-4o-mini",
+			model: "gpt-5.2",
 			apiKey: "test-key",
 		});
 
 		expect(client.getProviderName()).toBe("openai");
-		expect(client.getModel()).toBe("gpt-4o-mini");
+		expect(client.getModel()).toBe("gpt-5.2");
 		expect(client.getProtocol()).toBe("openai-compatible");
 	});
 

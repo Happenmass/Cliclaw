@@ -208,7 +208,7 @@ describe("ConfigView", () => {
 		defaultAgent: "claude-code",
 		llm: {
 			provider: "anthropic",
-			model: "claude-sonnet-4-5-20250929",
+			model: "claude-sonnet-4-6",
 		},
 		stateDetector: {
 			pollIntervalMs: 2000,
@@ -238,7 +238,7 @@ describe("ConfigView", () => {
 		const text = lines.join("\n");
 
 		expect(text).toContain("anthropic");
-		expect(text).toContain("claude-sonnet-4-5-20250929");
+		expect(text).toContain("claude-sonnet-4-6");
 		expect(text).toContain("claude-code");
 	});
 

@@ -30,13 +30,13 @@ describe("checkConfig", () => {
 
 	it("should return pass for valid config with provider and model", async () => {
 		mockReadFile(JSON.stringify({
-			llm: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+			llm: { provider: "anthropic", model: "claude-sonnet-4-6" },
 		}));
 		const result = await checkConfig();
 		expect(result.status).toBe("pass");
 		expect(result.name).toBe("config-valid");
 		expect(result.message).toContain("anthropic");
-		expect(result.message).toContain("claude-sonnet-4-5-20250929");
+		expect(result.message).toContain("claude-sonnet-4-6");
 	});
 
 	it("should return warning when config file does not exist", async () => {
