@@ -1,4 +1,4 @@
-// ─── CLIPilot Chat UI ──────────────────────────────
+// ─── Cliclaw Chat UI ──────────────────────────────
 
 let messagesEl;
 let contentEl;

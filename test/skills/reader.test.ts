@@ -8,7 +8,7 @@ let tmpDir: string;
 
 describe("readSkillDir", () => {
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "clipilot-skill-reader-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-skill-reader-"));
 	});
 
 	afterEach(async () => {

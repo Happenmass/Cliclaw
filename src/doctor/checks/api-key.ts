@@ -21,7 +21,7 @@ export async function checkApiKey(): Promise<CheckResult> {
 			name: CHECK_NAME,
 			status: "fail",
 			message: "No AI provider configured",
-			details: "Set llm.provider in config or run 'clipilot config'.",
+			details: "Set llm.provider in config or run 'cliclaw config'.",
 		};
 	}
 
@@ -61,6 +61,6 @@ export async function checkApiKey(): Promise<CheckResult> {
 		name: CHECK_NAME,
 		status: "fail",
 		message: `Missing API key for provider '${provider}'`,
-		details: `Set ${envVar} in your environment, or configure it via 'clipilot config'.`,
+		details: `Set ${envVar} in your environment, or configure it via 'cliclaw config'.`,
 	};
 }

@@ -92,7 +92,7 @@ const VEC_TABLE_SQL = (provider: string, dims: number) => {
 export interface MemoryStoreConfig {
 	/** Path to the SQLite database file */
 	dbPath: string;
-	/** Project identifier (e.g. "clipilot-a3f2d1") */
+	/** Project identifier (e.g. "cliclaw-a3f2d1") */
 	projectId: string;
 	/** Workspace root directory (project location, used for skills/prompts discovery) */
 	workspaceDir: string;

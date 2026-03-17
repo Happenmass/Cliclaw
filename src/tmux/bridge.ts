@@ -90,9 +90,9 @@ export class TmuxBridge {
 		}
 	}
 
-	async listClipilotSessions(): Promise<TmuxSession[]> {
+	async listCliclawSessions(): Promise<TmuxSession[]> {
 		const all = await this.listSessions();
-		return all.filter((s) => s.name.startsWith("clipilot-"));
+		return all.filter((s) => s.name.startsWith("cliclaw-"));
 	}
 
 	// Window management
@@ -207,7 +207,7 @@ export class TmuxBridge {
 			const { join } = await import("node:path");
 			const { tmpdir } = await import("node:os");
 
-			const tmpFile = join(tmpdir(), `clipilot-${randomUUID()}.txt`);
+			const tmpFile = join(tmpdir(), `cliclaw-${randomUUID()}.txt`);
 			try {
 				await writeFile(tmpFile, text);
 				await this.exec(["load-buffer", tmpFile]);

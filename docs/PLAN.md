@@ -1,8 +1,8 @@
-# CLIPilot 实施计划
+# Cliclaw 实施计划
 
 ## 项目定义
 
-CLIPilot 是一个基于 tmux 的 TUI 元调度器，它不直接写代码，而是通过 tmux 指挥 Claude Code、Codex、Pi 等专业编码 Agent 完成复杂的开发任务。通过分层状态检测和 LLM 推理实现长时间无人值守的自主开发。
+Cliclaw 是一个基于 tmux 的 TUI 元调度器，它不直接写代码，而是通过 tmux 指挥 Claude Code、Codex、Pi 等专业编码 Agent 完成复杂的开发任务。通过分层状态检测和 LLM 推理实现长时间无人值守的自主开发。
 
 ## 技术栈
 
@@ -17,7 +17,7 @@ CLIPilot 是一个基于 tmux 的 TUI 元调度器，它不直接写代码，而
 ## 项目结构
 
 ```
-clipilot/
+cliclaw/
 ├── package.json
 ├── tsconfig.json
 ├── biome.json
@@ -29,7 +29,7 @@ clipilot/
 │   │   ├── planner.ts             # LLM 驱动的任务规划器
 │   │   ├── scheduler.ts           # 任务调度器（串行/并行）
 │   │   ├── task.ts                # 任务数据结构和生命周期
-│   │   └── session.ts             # CLIPilot 会话管理
+│   │   └── session.ts             # Cliclaw 会话管理
 │   │
 │   ├── tmux/
 │   │   ├── bridge.ts              # tmux 命令封装层
@@ -104,9 +104,9 @@ Dashboard、交互控制、用户体验
 
 **具体任务**:
 1. 初始化 npm 项目，配置 package.json
-   - name: "clipilot"
+   - name: "cliclaw"
    - type: "module"
-   - bin: { "clipilot": "./dist/main.js" }
+   - bin: { "cliclaw": "./dist/main.js" }
    - scripts: build, dev, test, check
 2. 配置 tsconfig.json
    - target: ES2022, module: Node16
@@ -119,8 +119,8 @@ Dashboard、交互控制、用户体验
    - @biomejs/biome (dev)
 5. 创建 src/main.ts 入口，能成功编译和运行
 6. 创建 src/cli.ts，使用 Node.js 内置 parseArgs 解析参数:
-   - `clipilot "目标描述"` — 启动任务
-   - `clipilot` — 交互式输入
+   - `cliclaw "目标描述"` — 启动任务
+   - `cliclaw` — 交互式输入
    - `--agent <name>` — 指定 Agent (claude-code/codex/pi)
    - `--autonomy <level>` — 自主度 (low/medium/high/full)
    - `--model <id>` — 指定 LLM 模型
@@ -190,7 +190,7 @@ Dashboard、交互控制、用户体验
 **验收标准**: 测试通过，能创建 tmux session、发送命令、捕获输出
 
 **关键设计决策**:
-- target 格式统一使用 `session:window.pane`（如 `clipilot:0.0`）
+- target 格式统一使用 `session:window.pane`（如 `cliclaw:0.0`）
 - 所有 tmux 命令使用 execFile 而非 exec（避免 shell 注入）
 - 捕获内容自动去除尾部空行
 
@@ -236,10 +236,10 @@ Dashboard、交互控制、用户体验
 
 **具体任务**:
 1. 创建 `src/utils/config.ts`:
-   - 配置文件路径: `~/.clipilot/config.json`
+   - 配置文件路径: `~/.cliclaw/config.json`
    - 配置项:
      ```typescript
-     interface CLIPilotConfig {
+     interface CliclawConfig {
        defaultAgent: string;        // "claude-code"
        autonomyLevel: string;       // "medium"
        llm: {
@@ -253,7 +253,7 @@ Dashboard、交互控制、用户体验
          captureLines: number;      // 50
        };
        tmux: {
-         sessionPrefix: string;     // "clipilot"
+         sessionPrefix: string;     // "cliclaw"
        };
      }
      ```
@@ -261,7 +261,7 @@ Dashboard、交互控制、用户体验
    - `saveConfig(config)`: 保存配置
 
 2. 创建 `src/utils/logger.ts`:
-   - 日志写入文件: `~/.clipilot/logs/YYYY-MM-DD.log`
+   - 日志写入文件: `~/.cliclaw/logs/YYYY-MM-DD.log`
    - 日志级别: debug, info, warn, error
    - 同时写入 TUI 的日志流组件（通过事件）
    - 格式: `[HH:MM:SS] [LEVEL] [MODULE] message`
@@ -272,7 +272,7 @@ Dashboard、交互控制、用户体验
 
 ### Step 5: LLM 客户端
 
-**目标**: 建立 CLIPilot 自身的 LLM 调用能力（用于规划和判断，非编码）
+**目标**: 建立 Cliclaw 自身的 LLM 调用能力（用于规划和判断，非编码）
 
 **具体任务**:
 1. 创建 `src/llm/types.ts`:
@@ -763,7 +763,7 @@ Dashboard、交互控制、用户体验
 3. 实现完整的执行循环测试:
    - 创建一个简单的测试项目
    - 给定目标："在 test-project 中创建一个 hello.ts 文件，内容是打印 Hello World"
-   - 验证 CLIPilot 能规划、启动 Claude Code、发送 prompt、检测完成
+   - 验证 Cliclaw 能规划、启动 Claude Code、发送 prompt、检测完成
 
 **验收标准**: 能完成一个简单的端到端任务
 
@@ -771,14 +771,14 @@ Dashboard、交互控制、用户体验
 
 ### Step 12: Dashboard TUI
 
-**目标**: 实现 CLIPilot 的主界面
+**目标**: 实现 Cliclaw 的主界面
 
 **具体任务**:
 1. 创建 `src/tui/dashboard.ts`:
    - 布局（自上而下）:
      ```
      ┌─ Header ──────────────────────────────────┐
-     │ CLIPilot | 目标: "加上JWT认证" | ⏱ 00:05:23 │
+     │ Cliclaw | 目标: "加上JWT认证" | ⏱ 00:05:23 │
      ├─ Tasks ───────────────────────────────────┤
      │ ✓ 1. 安装 jsonwebtoken 依赖              │
      │ ▶ 2. 创建 auth middleware     [Claude Code]│
@@ -841,7 +841,7 @@ Dashboard、交互控制、用户体验
 3. Agent 视图切换:
    - 按 `Tab` 切换到 tmux session
    - 用户可以直接看到底层 Agent 的完整终端
-   - 按 `Tab` 返回 CLIPilot 视图（或自定义快捷键）
+   - 按 `Tab` 返回 Cliclaw 视图（或自定义快捷键）
 
 **验收标准**: 用户能通过快捷键控制执行流程
 
@@ -859,8 +859,8 @@ Dashboard、交互控制、用户体验
    - 无法恢复 → 标记 "need_human"，在 TUI 中提示
 
 2. 会话恢复:
-   - 调度状态持久化到 `~/.clipilot/sessions/<id>/state.json`
-   - 支持 `clipilot --resume <session-id>` 恢复中断的任务
+   - 调度状态持久化到 `~/.cliclaw/sessions/<id>/state.json`
+   - 支持 `cliclaw --resume <session-id>` 恢复中断的任务
    - 恢复时检查 tmux session 是否还在，不在则重建
 
 3. 优雅退出:

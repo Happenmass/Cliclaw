@@ -11,7 +11,7 @@ describe("MemoryStore", () => {
 	let store: MemoryStore;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "clipilot-test-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-test-"));
 		storageDir = join(tmpDir, "storage");
 		await mkdir(storageDir, { recursive: true });
 		dbPath = join(storageDir, "test.sqlite");
@@ -328,7 +328,7 @@ describe("listMemoryFiles", () => {
 	let tmpDir: string;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "clipilot-list-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-list-"));
 	});
 
 	afterEach(async () => {
@@ -370,7 +370,7 @@ describe("buildFileEntry", () => {
 	let tmpDir: string;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "clipilot-entry-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-entry-"));
 	});
 
 	afterEach(async () => {

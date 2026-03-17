@@ -1,4 +1,4 @@
-CLIPilot 架构深度分析（Chat-Driven MainAgent）
+Cliclaw 架构深度分析（Chat-Driven MainAgent）
 
 > **架构更新 (2026-03-04)**: 当前架构为 Chat-Driven 模式。关键特征：
 > - **已删除**: Planner, TaskGraph, Scheduler — 不再有多阶段规划/调度
@@ -18,7 +18,7 @@ CLIPilot 架构深度分析（Chat-Driven MainAgent）
 核心架构概览（当前）
 
 ┌──────────────────────────────────────────────────────────────────────────────────────┐
-│                        CLIPilot 架构 (Chat-Driven)                                    │
+│                        Cliclaw 架构 (Chat-Driven)                                    │
 │                                                                                      │
 │  ┌──────────┐    ┌──────────────┐         ┌────────────────────────────┐             │
 │  │ Web Chat │───▶│ Express +    │────────▶│       MainAgent           │             │
@@ -123,7 +123,7 @@ CLIPilot 架构深度分析（Chat-Driven MainAgent）
    │         │            │  │  tool="fetch_more" ────────────────────────────────────▶│               │           │  │
    │         │            │  │  tool="exit_agent" ────────────────────────▶│ exitAgent()│               │           │  │
    │         │            │  │  tool="create_session" ────────────────────────────────▶│ createSession │           │  │
-   │         │            │  │  tool="list_clipilot_sessions" ────────────────────────▶│ listSessions  │           │  │
+   │         │            │  │  tool="list_cliclaw_sessions" ────────────────────────▶│ listSessions  │           │  │
    │         │            │  │  tool="exec_command" ──▶ childProcess.exec()│            │               │           │  │
    │         │            │  │  tool="memory_*" ──▶ MemoryStore 操作       │            │               │           │  │
    │         │            │  │  tool="read_skill" ──▶ SkillReader          │            │               │           │  │
@@ -190,11 +190,11 @@ MainAgent 14 个 Tool 一览
 │ exit_agent         │    否     │ 退出当前 Agent 进程                       │
 │                    │           │ → adapter.exitAgent() → 返回输出+sessionId│
 ├────────────────────┼───────────┼───────────────────────────────────────────┤
-│ create_session     │    否     │ 创建 clipilot- 前缀 tmux 会话并启动 Agent │
+│ create_session     │    否     │ 创建 cliclaw- 前缀 tmux 会话并启动 Agent │
 │                    │           │ → bridge.createSession() + adapter.launch()│
 ├────────────────────┼───────────┼───────────────────────────────────────────┤
-│ list_clipilot_     │    否     │ 列出所有 clipilot- 前缀的 tmux 会话       │
-│   sessions         │           │ → bridge.listClipilotSessions()           │
+│ list_cliclaw_     │    否     │ 列出所有 cliclaw- 前缀的 tmux 会话       │
+│   sessions         │           │ → bridge.listCliclawSessions()           │
 ├────────────────────┼───────────┼───────────────────────────────────────────┤
 │ exec_command       │    否     │ 执行只读 bash 命令进行侦察                │
 │                    │           │ → childProcess.exec() + tool_activity 广播│
@@ -268,7 +268,7 @@ ContextManager 上下文管理
 │                                                                          │
 │   模块化系统提示词 (main-agent.md):                                       │
 │   ┌──────────────────────────────────────────────────────────────┐       │
-│   │  You are the Main Agent of CLIPilot.                         │       │
+│   │  You are the Main Agent of Cliclaw.                         │       │
 │   │                                                              │       │
 │   │  ## Compressed History                                       │       │
 │   │  {{compressed_history}}  ◀── 压缩后注入                     │       │
@@ -421,7 +421,7 @@ MainAgent 状态机
 ├──────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
 │   ┌────────────────────────────────────────────────────────────────┐     │
-│   │                 元层 LLM (CLIPilot 自身)                        │     │
+│   │                 元层 LLM (Cliclaw 自身)                        │     │
 │   │                                                                │     │
 │   │   ┌──────────────────────────────────────────────────────┐     │     │
 │   │   │            MainAgent (Chat-Driven 决策)               │     │     │

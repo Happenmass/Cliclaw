@@ -65,7 +65,7 @@ function createMockBridge(): TmuxBridge {
 			timestamp: Date.now(),
 		}),
 		hasSession: vi.fn().mockResolvedValue(false),
-		listClipilotSessions: vi.fn().mockResolvedValue([]),
+		listCliclawSessions: vi.fn().mockResolvedValue([]),
 	} as any;
 }
 

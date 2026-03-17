@@ -1,8 +1,8 @@
-# CLIPilot
+# Cliclaw
 
 Chat-based meta-orchestrator that commands coding agents (like Claude Code) via tmux to accomplish complex development tasks.
 
-CLIPilot runs as a persistent server with a web chat UI. You chat with the MainAgent naturally — it can answer questions, discuss code, and when you assign a development task, it autonomously commands coding agents in tmux sessions to get the work done, streaming progress updates back to you in real-time.
+Cliclaw runs as a persistent server with a web chat UI. You chat with the MainAgent naturally — it can answer questions, discuss code, and when you assign a development task, it autonomously commands coding agents in tmux sessions to get the work done, streaming progress updates back to you in real-time.
 
 ## Prerequisites
 
@@ -22,7 +22,7 @@ sudo apt install tmux
 ```bash
 # Clone and install
 git clone <repo-url>
-cd clipilot
+cd cliclaw
 npm install
 npm run build
 
@@ -34,31 +34,31 @@ npm link
 
 ```bash
 # Start the server in foreground (default port 3120)
-clipilot
+cliclaw
 
 # Open the chat UI in your browser
 open http://localhost:3120
 
 # Start the server in background (daemon mode)
-clipilot start
+cliclaw start
 
 # If already running, start prints the existing URL again
-clipilot start
+cliclaw start
 
 # Stop the background server
-clipilot stop
+cliclaw stop
 
 # Restart the background server (stop + start)
-clipilot restart
+cliclaw restart
 
 # Start with a specific port
-clipilot --port 8080
+cliclaw --port 8080
 
 # Specify a provider and model
-clipilot -p openai -m gpt-5.4
+cliclaw -p openai -m gpt-5.4
 ```
 
-In background mode, CLIPilot writes logs to `~/.clipilot/logs/server.log` and runtime state to `~/.clipilot/server-state.json`.
+In background mode, Cliclaw writes logs to `~/.cliclaw/logs/server.log` and runtime state to `~/.cliclaw/server-state.json`.
 
 Once the server is running, open the printed URL (default `http://localhost:3120`) in your browser. You'll see a chat interface where you can:
 
@@ -99,10 +99,10 @@ Your conversation persists in SQLite — restart the server and pick up where yo
 ## CLI Options
 
 ```
-clipilot [options]              Start the chat server in foreground (default)
-clipilot serve [options]        Start the chat server in foreground explicitly
-clipilot start [options]        Start the chat server in background
-clipilot stop                   Stop the background server
+cliclaw [options]              Start the chat server in foreground (default)
+cliclaw serve [options]        Start the chat server in foreground explicitly
+cliclaw start [options]        Start the chat server in background
+cliclaw stop                   Stop the background server
 
 Subcommands:
   serve                   Start the chat server in foreground (default behavior)
@@ -128,10 +128,10 @@ Options:
 
 ## Configuration
 
-CLIPilot stores configuration in `~/.clipilot/config.json`. Edit it directly or use the interactive TUI:
+Cliclaw stores configuration in `~/.cliclaw/config.json`. Edit it directly or use the interactive TUI:
 
 ```bash
-clipilot config
+cliclaw config
 ```
 
 ### Config File Format

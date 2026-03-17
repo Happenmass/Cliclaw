@@ -1,10 +1,10 @@
 {
-	"name": "clipilot",
+	"name": "cliclaw",
 	"version": "0.1.0",
 	"description": "TUI meta-orchestrator that commands coding agents via tmux",
 	"type": "module",
 	"bin": {
-		"clipilot": "./dist/main.js"
+		"cliclaw": "./dist/main.js"
 	},
 	"scripts": {
 		"build": "tsc && cp -r src/agents/claude-code-skills dist/agents/",

@@ -11,7 +11,7 @@ const SKILL_CONTENT = (name: string, type = "agent-capability") =>
 
 describe("discoverSkills", () => {
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "clipilot-discovery-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-discovery-"));
 	});
 
 	afterEach(async () => {
@@ -32,8 +32,8 @@ describe("discoverSkills", () => {
 
 	it("should discover skills from workspace directory", async () => {
 		const workspaceDir = tmpDir;
-		await mkdir(join(workspaceDir, ".clipilot", "skills", "custom"), { recursive: true });
-		await writeFile(join(workspaceDir, ".clipilot", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
+		await mkdir(join(workspaceDir, ".cliclaw", "skills", "custom"), { recursive: true });
+		await writeFile(join(workspaceDir, ".cliclaw", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
 
 		const skills = await discoverSkills({ workspaceDir });
 
@@ -49,8 +49,8 @@ describe("discoverSkills", () => {
 		await mkdir(join(adapterDir, "openspec"), { recursive: true });
 		await writeFile(join(adapterDir, "openspec", "SKILL.md"), SKILL_CONTENT("openspec"));
 
-		await mkdir(join(workspaceDir, ".clipilot", "skills", "custom"), { recursive: true });
-		await writeFile(join(workspaceDir, ".clipilot", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
+		await mkdir(join(workspaceDir, ".cliclaw", "skills", "custom"), { recursive: true });
+		await writeFile(join(workspaceDir, ".cliclaw", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
 
 		const skills = await discoverSkills({ adapterSkillsDir: adapterDir, workspaceDir });
 
@@ -69,9 +69,9 @@ describe("discoverSkills", () => {
 			`---\nname: commit\ntype: agent-capability\ndescription: "adapter commit"\n---\nAdapter body`,
 		);
 
-		await mkdir(join(workspaceDir, ".clipilot", "skills", "commit"), { recursive: true });
+		await mkdir(join(workspaceDir, ".cliclaw", "skills", "commit"), { recursive: true });
 		await writeFile(
-			join(workspaceDir, ".clipilot", "skills", "commit", "SKILL.md"),
+			join(workspaceDir, ".cliclaw", "skills", "commit", "SKILL.md"),
 			`---\nname: commit\ntype: agent-capability\ndescription: "workspace commit"\n---\nWorkspace body`,
 		);
 

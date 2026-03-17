@@ -56,7 +56,7 @@ export interface SkillsConfig {
 	disabled: string[];
 }
 
-export interface CLIPilotConfig {
+export interface CliclawConfig {
 	defaultAgent: string;
 	debug: boolean;
 	llm: LLMConfig;
@@ -67,7 +67,7 @@ export interface CLIPilotConfig {
 	skills: SkillsConfig;
 }
 
-const CONFIG_DIR = join(homedir(), ".clipilot");
+const CONFIG_DIR = join(homedir(), ".cliclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 const SERVER_STATE_FILE = join(CONFIG_DIR, "server-state.json");
 
@@ -80,7 +80,7 @@ export interface ServerRuntimeState {
 	startedAt: string;
 }
 
-const DEFAULT_CONFIG: CLIPilotConfig = {
+const DEFAULT_CONFIG: CliclawConfig = {
 	defaultAgent: "claude-code",
 	debug: false,
 	llm: {
@@ -93,7 +93,7 @@ const DEFAULT_CONFIG: CLIPilotConfig = {
 		captureLines: 50,
 	},
 	tmux: {
-		sessionPrefix: "clipilot",
+		sessionPrefix: "cliclaw",
 	},
 	memory: {
 		embeddingProvider: "auto",
@@ -127,7 +127,7 @@ export async function ensureConfigDir(): Promise<void> {
 	await mkdir(CONFIG_DIR, { recursive: true });
 }
 
-export async function loadConfig(): Promise<CLIPilotConfig> {
+export async function loadConfig(): Promise<CliclawConfig> {
 	if (!existsSync(CONFIG_FILE)) {
 		return { ...DEFAULT_CONFIG };
 	}
@@ -151,7 +151,7 @@ export async function loadConfig(): Promise<CLIPilotConfig> {
 	}
 }
 
-export async function saveConfig(config: CLIPilotConfig): Promise<void> {
+export async function saveConfig(config: CliclawConfig): Promise<void> {
 	await ensureConfigDir();
 	await writeFile(CONFIG_FILE, JSON.stringify(config, null, "\t"), "utf-8");
 }

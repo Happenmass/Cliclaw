@@ -21,7 +21,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
 
 describe("Skill System Integration", () => {
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "clipilot-skill-integration-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-skill-integration-"));
 	});
 
 	afterEach(async () => {
@@ -63,9 +63,9 @@ How to use commit.`,
 
 		// Setup workspace skill
 		const workspaceDir = tmpDir;
-		await mkdir(join(workspaceDir, ".clipilot", "skills", "deploy"), { recursive: true });
+		await mkdir(join(workspaceDir, ".cliclaw", "skills", "deploy"), { recursive: true });
 		await writeFile(
-			join(workspaceDir, ".clipilot", "skills", "deploy", "SKILL.md"),
+			join(workspaceDir, ".cliclaw", "skills", "deploy", "SKILL.md"),
 			`---
 name: deploy
 description: "Deployment automation"
@@ -118,16 +118,16 @@ Deployment instructions.`,
 
 		// Workspace overrides commit
 		const workspaceDir = tmpDir;
-		await mkdir(join(workspaceDir, ".clipilot", "skills", "commit"), { recursive: true });
+		await mkdir(join(workspaceDir, ".cliclaw", "skills", "commit"), { recursive: true });
 		await writeFile(
-			join(workspaceDir, ".clipilot", "skills", "commit", "SKILL.md"),
+			join(workspaceDir, ".cliclaw", "skills", "commit", "SKILL.md"),
 			`---\nname: commit\ntype: agent-capability\ndescription: "custom commit"\ncommands: [/commit, /commit:amend]\n---\nCustom commit.`,
 		);
 
 		// Workspace also has a main-agent-tool
-		await mkdir(join(workspaceDir, ".clipilot", "skills", "risk"), { recursive: true });
+		await mkdir(join(workspaceDir, ".cliclaw", "skills", "risk"), { recursive: true });
 		await writeFile(
-			join(workspaceDir, ".clipilot", "skills", "risk", "SKILL.md"),
+			join(workspaceDir, ".cliclaw", "skills", "risk", "SKILL.md"),
 			`---
 name: risk
 type: main-agent-tool

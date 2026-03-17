@@ -203,14 +203,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "create_session",
 		description:
-			'Create a tmux session with the "clipilot-" prefix and launch the coding agent in it. Must be called before send_to_agent/respond_to_agent/fetch_more. On naming conflict, returns an error so you can retry with a different name.',
+			'Create a tmux session with the "cliclaw-" prefix and launch the coding agent in it. Must be called before send_to_agent/respond_to_agent/fetch_more. On naming conflict, returns an error so you can retry with a different name.',
 		parameters: {
 			type: "object",
 			properties: {
 				session_name: {
 					type: "string",
 					description:
-						'Session name (will be prefixed with "clipilot-" if not already). If omitted, auto-generated.',
+						'Session name (will be prefixed with "cliclaw-" if not already). If omitted, auto-generated.',
 				},
 				working_dir: {
 					type: "string",
@@ -220,9 +220,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 		},
 	},
 	{
-		name: "list_clipilot_sessions",
+		name: "list_cliclaw_sessions",
 		description:
-			"List all tmux sessions with the clipilot- prefix. Useful for checking existing sessions before creating a new one.",
+			"List all tmux sessions with the cliclaw- prefix. Useful for checking existing sessions before creating a new one.",
 		parameters: {
 			type: "object",
 			properties: {},
@@ -251,14 +251,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "kill_session",
 		description:
-			"Kill and remove a tmux session entirely. Use this to clean up sessions that are no longer needed. Unlike exit_agent (which gracefully exits the agent process), this forcefully destroys the entire tmux session. Can kill any clipilot- prefixed session by name, or kill all clipilot sessions at once.",
+			"Kill and remove a tmux session entirely. Use this to clean up sessions that are no longer needed. Unlike exit_agent (which gracefully exits the agent process), this forcefully destroys the entire tmux session. Can kill any cliclaw- prefixed session by name, or kill all cliclaw sessions at once.",
 		parameters: {
 			type: "object",
 			properties: {
 				session_id: {
 					type: "string",
 					description:
-						'The session name to kill (e.g. "clipilot-chat-1"). If set to "all", kills all clipilot- prefixed sessions.',
+						'The session name to kill (e.g. "cliclaw-chat-1"). If set to "all", kills all cliclaw- prefixed sessions.',
 				},
 				summary: {
 					type: "string",
@@ -397,7 +397,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		const entry = this.sessions.get(id);
 		if (!entry) {
 			return {
-				error: `Session "${id}" not found. Use list_clipilot_sessions to see available sessions.`,
+				error: `Session "${id}" not found. Use list_cliclaw_sessions to see available sessions.`,
 			};
 		}
 		return { entry, id };
@@ -1276,8 +1276,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				let sessionName = args.session_name as string | undefined;
 				if (!sessionName) {
 					sessionName = generateSessionName("chat");
-				} else if (!sessionName.startsWith("clipilot-")) {
-					sessionName = `clipilot-${sessionName}`;
+				} else if (!sessionName.startsWith("cliclaw-")) {
+					sessionName = `cliclaw-${sessionName}`;
 				}
 
 				const workingDir = (args.working_dir as string | undefined) ?? process.cwd();
@@ -1294,7 +1294,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				const exists = await this.bridge.hasSession(sessionName);
 				if (exists) {
 					return {
-						output: `Error: Session "${sessionName}" already exists. Choose a different name or use list_clipilot_sessions to see existing sessions.`,
+						output: `Error: Session "${sessionName}" already exists. Choose a different name or use list_cliclaw_sessions to see existing sessions.`,
 						terminal: false,
 					};
 				}
@@ -1341,16 +1341,16 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				}
 			}
 
-			case "list_clipilot_sessions": {
+			case "list_cliclaw_sessions": {
 				try {
-					const sessions = await this.bridge.listClipilotSessions();
+					const sessions = await this.bridge.listCliclawSessions();
 					if (sessions.length === 0) {
-						return { output: "No clipilot sessions found.", terminal: false };
+						return { output: "No cliclaw sessions found.", terminal: false };
 					}
 					const formatted = sessions
 						.map((s) => `- ${s.name} (windows: ${s.windows}, attached: ${s.attached})`)
 						.join("\n");
-					return { output: `Found ${sessions.length} clipilot session(s):\n${formatted}`, terminal: false };
+					return { output: `Found ${sessions.length} cliclaw session(s):\n${formatted}`, terminal: false };
 				} catch (err: any) {
 					return { output: `Error listing sessions: ${err.message}`, terminal: false };
 				}
@@ -1431,9 +1431,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 				try {
 					if (killSessionId === "all") {
-						const sessions = await this.bridge.listClipilotSessions();
+						const sessions = await this.bridge.listCliclawSessions();
 						if (sessions.length === 0) {
-							return { output: "No clipilot sessions to kill.", terminal: false };
+							return { output: "No cliclaw sessions to kill.", terminal: false };
 						}
 						const killed: string[] = [];
 						for (const s of sessions) {
@@ -1453,11 +1453,11 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					}
 
 					// Single session
-					const targetName = killSessionId.startsWith("clipilot-") ? killSessionId : `clipilot-${killSessionId}`;
+					const targetName = killSessionId.startsWith("cliclaw-") ? killSessionId : `cliclaw-${killSessionId}`;
 					const exists = await this.bridge.hasSession(targetName);
 					if (!exists) {
 						return {
-							output: `Session "${targetName}" not found. Use list_clipilot_sessions to see available sessions.`,
+							output: `Session "${targetName}" not found. Use list_cliclaw_sessions to see available sessions.`,
 							terminal: false,
 						};
 					}
@@ -1554,5 +1554,5 @@ function generateSessionName(prefix: string): string {
 		.replace(/^-+|-+$/g, "")
 		.slice(0, 30)
 		.replace(/-$/, "");
-	return `clipilot-${slug || "session"}`;
+	return `cliclaw-${slug || "session"}`;
 }

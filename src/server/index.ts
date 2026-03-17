@@ -36,7 +36,7 @@ export interface ServerInstance {
 }
 
 /**
- * Create and start the CLIPilot HTTP + WebSocket server.
+ * Create and start the Cliclaw HTTP + WebSocket server.
  */
 export async function startServer(opts: ServerOptions): Promise<ServerInstance> {
 	const {
@@ -149,8 +149,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		server.listen(port, host, () => {
 			const address = server.address();
 			const actualPort = typeof address === "object" && address ? address.port : port;
-			logger.info("server", `CLIPilot server running at http://${host}:${actualPort}`);
-			console.log(`CLIPilot server running at http://${host}:${actualPort}`);
+			logger.info("server", `Cliclaw server running at http://${host}:${actualPort}`);
+			console.log(`Cliclaw server running at http://${host}:${actualPort}`);
 
 			resolve({
 				port: actualPort,

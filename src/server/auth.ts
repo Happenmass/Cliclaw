@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 
-export const AUTH_COOKIE_NAME = "clipilot_auth";
+export const AUTH_COOKIE_NAME = "cliclaw_auth";
 
 export function createServerAuthToken(): string {
 	return randomBytes(24).toString("base64url");

@@ -5,7 +5,7 @@ const bridge = new TmuxBridge();
 let sessionCounter = 0;
 
 function makeSessionName() {
-	return `clipilot-test-${Date.now()}-${sessionCounter++}`;
+	return `cliclaw-test-${Date.now()}-${sessionCounter++}`;
 }
 
 describe("TmuxBridge", () => {
@@ -66,7 +66,7 @@ describe("TmuxBridge", () => {
 		const target = `${name}:0.0`;
 
 		// Send a command
-		await bridge.sendKeys(target, "echo hello-clipilot-test", { literal: true });
+		await bridge.sendKeys(target, "echo hello-cliclaw-test", { literal: true });
 		await bridge.sendEnter(target);
 
 		// Wait for command to execute
@@ -74,7 +74,7 @@ describe("TmuxBridge", () => {
 
 		// Capture output
 		const capture = await bridge.capturePane(target);
-		expect(capture.content).toContain("hello-clipilot-test");
+		expect(capture.content).toContain("hello-cliclaw-test");
 		expect(capture.lines.length).toBeGreaterThan(0);
 		expect(capture.timestamp).toBeGreaterThan(0);
 	});
@@ -110,19 +110,19 @@ describe("TmuxBridge", () => {
 		expect(panes[0].height).toBeGreaterThan(0);
 	});
 
-	it("should list only clipilot sessions", async () => {
+	it("should list only cliclaw sessions", async () => {
 		if (!tmuxAvailable) return;
 
-		const clipilotName = makeSessionName(); // starts with "clipilot-test-"
+		const CliclawName = makeSessionName(); // starts with "cliclaw-test-"
 		const otherName = `other-session-${Date.now()}-${sessionCounter++}`;
-		activeSessions.push(clipilotName, otherName);
+		activeSessions.push(CliclawName, otherName);
 
-		await bridge.createSession(clipilotName);
+		await bridge.createSession(CliclawName);
 		await bridge.createSession(otherName);
 
-		const clipilotSessions = await bridge.listClipilotSessions();
-		expect(clipilotSessions.some((s) => s.name === clipilotName)).toBe(true);
-		expect(clipilotSessions.every((s) => s.name.startsWith("clipilot-"))).toBe(true);
-		expect(clipilotSessions.some((s) => s.name === otherName)).toBe(false);
+		const CliclawSessions = await bridge.listCliclawSessions();
+		expect(CliclawSessions.some((s) => s.name === CliclawName)).toBe(true);
+		expect(CliclawSessions.every((s) => s.name.startsWith("cliclaw-"))).toBe(true);
+		expect(CliclawSessions.some((s) => s.name === otherName)).toBe(false);
 	});
 });

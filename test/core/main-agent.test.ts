@@ -95,7 +95,7 @@ function createMockBridge() {
 			timestamp: Date.now(),
 		}),
 		hasSession: vi.fn().mockResolvedValue(false),
-		listClipilotSessions: vi.fn().mockResolvedValue([]),
+		listCliclawSessions: vi.fn().mockResolvedValue([]),
 		createSession: vi.fn().mockResolvedValue(undefined),
 	} as any;
 }
@@ -775,19 +775,19 @@ describe("MainAgent State Machine", () => {
 			const agent = setupAgent([
 				toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
 				toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
-				toolCallResponse("send_to_agent", { prompt: "test", summary: "test", session_id: "clipilot-backend" }, "tc3"),
+				toolCallResponse("send_to_agent", { prompt: "test", summary: "test", session_id: "cliclaw-backend" }, "tc3"),
 				textResponse("Done."),
 			]);
 
 			// Adapter returns different pane targets for each session
 			mockAdapter.launch
-				.mockResolvedValueOnce("clipilot-backend:0.0")
-				.mockResolvedValueOnce("clipilot-frontend:0.0");
+				.mockResolvedValueOnce("cliclaw-backend:0.0")
+				.mockResolvedValueOnce("cliclaw-frontend:0.0");
 
 			await agent.handleMessage("multi session task");
 
-			// send_to_agent should have targeted clipilot-backend's pane
-			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "clipilot-backend:0.0", "test");
+			// send_to_agent should have targeted cliclaw-backend's pane
+			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "cliclaw-backend:0.0", "test");
 		});
 
 		it("should route to active session when session_id is omitted", async () => {
@@ -797,11 +797,11 @@ describe("MainAgent State Machine", () => {
 				textResponse("Done."),
 			]);
 
-			mockAdapter.launch.mockResolvedValueOnce("clipilot-backend:0.0");
+			mockAdapter.launch.mockResolvedValueOnce("cliclaw-backend:0.0");
 
 			await agent.handleMessage("send to active");
 
-			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "clipilot-backend:0.0", "test");
+			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "cliclaw-backend:0.0", "test");
 		});
 
 		it("should return error for non-existent session_id", async () => {
@@ -832,23 +832,23 @@ describe("MainAgent State Machine", () => {
 			const agent = setupAgent([
 				toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
 				toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
-				toolCallResponse("exit_agent", { summary: "exit frontend", session_id: "clipilot-frontend" }, "tc3"),
+				toolCallResponse("exit_agent", { summary: "exit frontend", session_id: "cliclaw-frontend" }, "tc3"),
 				// After exit, send to remaining session without session_id
 				toolCallResponse("send_to_agent", { prompt: "continue", summary: "continue" }, "tc4"),
 				textResponse("Done."),
 			]);
 
 			mockAdapter.launch
-				.mockResolvedValueOnce("clipilot-backend:0.0")
-				.mockResolvedValueOnce("clipilot-frontend:0.0");
+				.mockResolvedValueOnce("cliclaw-backend:0.0")
+				.mockResolvedValueOnce("cliclaw-frontend:0.0");
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
 
 			await agent.handleMessage("exit and continue");
 
 			// exit_agent should have been called on frontend's pane
-			expect(mockAdapter.exitAgent).toHaveBeenCalledWith(mockBridge, "clipilot-frontend:0.0");
+			expect(mockAdapter.exitAgent).toHaveBeenCalledWith(mockBridge, "cliclaw-frontend:0.0");
 			// send_to_agent should route to backend (the remaining session)
-			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "clipilot-backend:0.0", "continue");
+			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "cliclaw-backend:0.0", "continue");
 		});
 
 		it("should set activeSessionId to null when last session is exited", async () => {
@@ -873,21 +873,21 @@ describe("MainAgent State Machine", () => {
 				toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
 				toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
 				// frontend is now active; exit backend
-				toolCallResponse("exit_agent", { summary: "exit backend", session_id: "clipilot-backend" }, "tc3"),
+				toolCallResponse("exit_agent", { summary: "exit backend", session_id: "cliclaw-backend" }, "tc3"),
 				// send without session_id should still go to frontend (still active)
 				toolCallResponse("send_to_agent", { prompt: "continue", summary: "continue" }, "tc4"),
 				textResponse("Done."),
 			]);
 
 			mockAdapter.launch
-				.mockResolvedValueOnce("clipilot-backend:0.0")
-				.mockResolvedValueOnce("clipilot-frontend:0.0");
+				.mockResolvedValueOnce("cliclaw-backend:0.0")
+				.mockResolvedValueOnce("cliclaw-frontend:0.0");
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
 
 			await agent.handleMessage("exit non-active");
 
-			expect(mockAdapter.exitAgent).toHaveBeenCalledWith(mockBridge, "clipilot-backend:0.0");
-			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "clipilot-frontend:0.0", "continue");
+			expect(mockAdapter.exitAgent).toHaveBeenCalledWith(mockBridge, "cliclaw-backend:0.0");
+			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "cliclaw-frontend:0.0", "continue");
 		});
 
 		it("should update activeSessionId when using session_id parameter", async () => {
@@ -895,22 +895,22 @@ describe("MainAgent State Machine", () => {
 				toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
 				toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
 				// Send to backend explicitly — should switch active
-				toolCallResponse("send_to_agent", { prompt: "backend task", summary: "test", session_id: "clipilot-backend" }, "tc3"),
+				toolCallResponse("send_to_agent", { prompt: "backend task", summary: "test", session_id: "cliclaw-backend" }, "tc3"),
 				// Now send without session_id — should go to backend (newly active)
 				toolCallResponse("send_to_agent", { prompt: "follow up", summary: "test" }, "tc4"),
 				textResponse("Done."),
 			]);
 
 			mockAdapter.launch
-				.mockResolvedValueOnce("clipilot-backend:0.0")
-				.mockResolvedValueOnce("clipilot-frontend:0.0");
+				.mockResolvedValueOnce("cliclaw-backend:0.0")
+				.mockResolvedValueOnce("cliclaw-frontend:0.0");
 
 			await agent.handleMessage("switch active");
 
 			const sendCalls = mockAdapter.sendPrompt.mock.calls;
 			expect(sendCalls).toHaveLength(2);
-			expect(sendCalls[0]).toEqual([mockBridge, "clipilot-backend:0.0", "backend task"]);
-			expect(sendCalls[1]).toEqual([mockBridge, "clipilot-backend:0.0", "follow up"]);
+			expect(sendCalls[0]).toEqual([mockBridge, "cliclaw-backend:0.0", "backend task"]);
+			expect(sendCalls[1]).toEqual([mockBridge, "cliclaw-backend:0.0", "follow up"]);
 		});
 
 		it("should work with setPaneTarget for backward compatibility", async () => {

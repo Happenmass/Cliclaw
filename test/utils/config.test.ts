@@ -5,9 +5,9 @@ import { describe, expect, it } from "vitest";
 import { getProjectStorageDir } from "../../src/utils/config.js";
 
 describe("getProjectStorageDir", () => {
-	it("returns path under ~/.clipilot/projects/ with basename-hash format", () => {
+	it("returns path under ~/.cliclaw/projects/ with basename-hash format", () => {
 		const dir = getProjectStorageDir("/Users/test/code/myapp");
-		const configDir = join(homedir(), ".clipilot");
+		const configDir = join(homedir(), ".cliclaw");
 		expect(dir.startsWith(join(configDir, "projects"))).toBe(true);
 		expect(dir).toMatch(/myapp-[a-f0-9]{6}$/);
 	});

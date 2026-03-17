@@ -40,13 +40,13 @@ export class PromptLoader {
 		// Layer 1: Built-in defaults from package's prompts/ directory
 		await this.loadFromDir(this.builtinDir);
 
-		// Layer 2: User-level overrides (~/.clipilot/prompts/*.md)
-		const userPromptsDir = join(homedir(), ".clipilot", "prompts");
+		// Layer 2: User-level overrides (~/.cliclaw/prompts/*.md)
+		const userPromptsDir = join(homedir(), ".cliclaw", "prompts");
 		await this.loadFromDir(userPromptsDir);
 
-		// Layer 3: Project-level overrides ({project}/.clipilot/prompts/*.md)
+		// Layer 3: Project-level overrides ({project}/.cliclaw/prompts/*.md)
 		if (projectDir) {
-			const projectPromptsDir = join(projectDir, ".clipilot", "prompts");
+			const projectPromptsDir = join(projectDir, ".cliclaw", "prompts");
 			await this.loadFromDir(projectPromptsDir);
 		}
 	}

@@ -2,9 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## What is CLIPilot
+## What is Cliclaw
 
-CLIPilot is a chat-based meta-orchestrator that commands coding agents (like Claude Code) via tmux. It runs as a persistent HTTP + WebSocket server with a web chat UI. The MainAgent can hold natural conversations and autonomously execute complex development tasks by commanding coding agents in tmux sessions.
+Cliclaw is a chat-based meta-orchestrator that commands coding agents (like Claude Code) via tmux. It runs as a persistent HTTP + WebSocket server with a web chat UI. The MainAgent can hold natural conversations and autonomously execute complex development tasks by commanding coding agents in tmux sessions.
 
 Core flow: **Chat message → MainAgent (IDLE ↔ EXECUTING state machine) → Streaming LLM → Tool execution in tmux → Response via WebSocket**
 
@@ -56,8 +56,8 @@ Emits events: `state_change`, `log`. 14 built-in tools:
 - `escalate_to_human` — terminal: request human intervention
 - `memory_search` / `memory_get` / `memory_write` — hybrid search, read, and persist memories
 - `read_skill` — read full SKILL.md content on demand
-- `create_session` — create a `clipilot-` prefixed tmux session and launch agent
-- `list_clipilot_sessions` — list all `clipilot-` prefixed sessions
+- `create_session` — create a `cliclaw-` prefixed tmux session and launch agent
+- `list_cliclaw_sessions` — list all `cliclaw-` prefixed sessions
 - `exit_agent` — exit the current coding agent process, returns captured output and optional session id for resume
 - `exec_command` — execute read-only bash commands for reconnaissance
 
@@ -72,7 +72,7 @@ HTTP + WebSocket server for the chat interface.
 - `message-queue.ts` — Simple FIFO queue for human messages received during EXECUTING state. Drained between tool-use rounds.
 
 ### Conversation Persistence (`src/persistence/`)
-- `conversation-store.ts` — SQLite persistence for chat messages and context state. Two tables in the global `~/.clipilot/clipilot.db`:
+- `conversation-store.ts` — SQLite persistence for chat messages and context state. Two tables in the global `~/.cliclaw/cliclaw.db`:
   - `chat_messages` — role, content (JSON-serialized), tool_call_id, created_at
   - `chat_context_state` — key-value store for compressed_history, compaction_count, etc.
   - Methods: `saveMessage()`, `loadMessages()`, `saveContextState()`, `loadContextState()`, `clearAll()`, `getMessageCount()`
@@ -149,7 +149,7 @@ Minimal vanilla HTML/CSS/JS chat interface served by Express as static files.
 - `claude-code.ts` — `ClaudeCodeAdapter`: concrete implementation for Claude Code agent.
 
 ### Other Components
-- `TmuxBridge` (`src/tmux/bridge.ts`) — tmux command wrapper (create sessions, send keys, capture panes, `listClipilotSessions()`)
+- `TmuxBridge` (`src/tmux/bridge.ts`) — tmux command wrapper (create sessions, send keys, capture panes, `listCliclawSessions()`)
 - `Session` (`src/core/session.ts`) — session lifecycle management
 - `AppTUI` (`src/tui/app.ts`) — legacy TUI dashboard (still compiles but not used as primary interface)
 
@@ -172,7 +172,7 @@ Key test directories:
 
 ## Config
 
-User config at `~/.clipilot/config.json`. Managed via `src/utils/config.ts`. The `clipilot config` subcommand opens a TUI editor. The `clipilot doctor` subcommand checks environment prerequisites (tmux, node version, API keys).
+User config at `~/.cliclaw/config.json`. Managed via `src/utils/config.ts`. The `cliclaw config` subcommand opens a TUI editor. The `cliclaw doctor` subcommand checks environment prerequisites (tmux, node version, API keys).
 
 Memory-related config under `config.memory`:
 - `embeddingProvider` — `"auto"` (default) | `"openai"` | `"gemini"` | `"voyage"` | `"mistral"` | `"local"` | `"none"`

@@ -59,14 +59,14 @@ export function parseCliArgs(): CLIArgs {
 
 export function printHelp(): void {
 	console.log(`
-CLIPilot - Chat-based meta-orchestrator for coding agents
+Cliclaw - Chat-based meta-orchestrator for coding agents
 
 Usage:
-  clipilot [options]              Start the chat server in foreground (default)
-  clipilot serve [options]        Start the chat server in foreground explicitly
-  clipilot start [options]        Start the chat server in background
-  clipilot stop                   Stop the background server
-  clipilot restart [options]      Restart the background server
+  cliclaw [options]              Start the chat server in foreground (default)
+  cliclaw serve [options]        Start the chat server in foreground explicitly
+  cliclaw start [options]        Start the chat server in background
+  cliclaw stop                   Stop the background server
+  cliclaw restart [options]      Restart the background server
 
 Subcommands:
   serve                   Start the chat server in foreground (default behavior)
@@ -94,13 +94,13 @@ Options:
   -v, --version           Show version
 
 Examples:
-  clipilot                                            # Start foreground server on default port
-  clipilot start                                      # Start background server
-  clipilot stop                                       # Stop background server
-  clipilot --host 0.0.0.0 --port 3120                 # Expose server on all interfaces
-  clipilot --port 8080                                # Start server on port 8080
-  clipilot -p openai -m gpt-5.4                        # Start with specific LLM
-  clipilot remember "This project uses PostgreSQL"    # Save a memory note
+  cliclaw                                            # Start foreground server on default port
+  cliclaw start                                      # Start background server
+  cliclaw stop                                       # Stop background server
+  cliclaw --host 0.0.0.0 --port 3120                 # Expose server on all interfaces
+  cliclaw --port 8080                                # Start server on port 8080
+  cliclaw -p openai -m gpt-5.4                        # Start with specific LLM
+  cliclaw remember "This project uses PostgreSQL"    # Save a memory note
 
 Environment variables:
   ANTHROPIC_API_KEY       Anthropic API key
@@ -117,5 +117,5 @@ Environment variables:
 }
 
 export function printVersion(): void {
-	console.log("clipilot v0.2.0");
+	console.log("cliclaw v0.2.0");
 }

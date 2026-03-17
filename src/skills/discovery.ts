@@ -28,7 +28,7 @@ export async function discoverSkills(opts: DiscoveryOptions): Promise<SkillEntry
 
 	// Load workspace skills (high priority, overrides adapter)
 	if (opts.workspaceDir) {
-		const workspaceSkillsDir = join(opts.workspaceDir, ".clipilot", "skills");
+		const workspaceSkillsDir = join(opts.workspaceDir, ".cliclaw", "skills");
 		const workspaceSkills = await scanDirectory(workspaceSkillsDir, "workspace");
 		for (const skill of workspaceSkills) {
 			if (merged.has(skill.name)) {

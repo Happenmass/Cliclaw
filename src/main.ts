@@ -102,7 +102,7 @@ async function triggerTmuxEscapeCascade(opts?: { repeats?: number; intervalMs?: 
 		return;
 	}
 
-	const sessions = await bridge.listClipilotSessions();
+	const sessions = await bridge.listCliclawSessions();
 	for (const session of sessions) {
 		let panes = [];
 		try {
@@ -259,14 +259,14 @@ async function handleStartCommand(args: ReturnType<typeof parseCliArgs>): Promis
 
 	const running = await getActiveServerState();
 	if (running) {
-		console.log(`CLIPilot is already running: ${running.url}`);
+		console.log(`Cliclaw is already running: ${running.url}`);
 		return;
 	}
 
 	// Check if port is already in use (e.g. by a foreground process without state file)
 	if (await isPortInUse(args.host, args.port)) {
 		console.error(`Port ${args.port} is already in use.`);
-		console.error("Run 'clipilot stop' first, or use --port to specify a different port.");
+		console.error("Run 'cliclaw stop' first, or use --port to specify a different port.");
 		process.exit(1);
 	}
 
@@ -280,20 +280,20 @@ async function handleStartCommand(args: ReturnType<typeof parseCliArgs>): Promis
 			stdio: ["ignore", fd, fd],
 			env: {
 				...process.env,
-				CLIPILOT_DAEMON: "1",
+				CLICLAW_DAEMON: "1",
 			},
 		});
 
 		child.unref();
 
 		if (!child.pid) {
-			console.error("Failed to launch CLIPilot background process.");
+			console.error("Failed to launch Cliclaw background process.");
 			process.exit(1);
 		}
 
 		const state = await waitForServerState(child.pid);
 		if (state) {
-			console.log(`CLIPilot started in background: ${state.url}`);
+			console.log(`Cliclaw started in background: ${state.url}`);
 			console.log(`Log file: ${logFile}`);
 			return;
 		}
@@ -305,12 +305,12 @@ async function handleStartCommand(args: ReturnType<typeof parseCliArgs>): Promis
 				const logContent = readFileSync(logFile, "utf-8");
 				const lastLines = logContent.split("\n").filter(Boolean).slice(-5).join("\n");
 				if (lastLines) {
-					console.error(`Failed to start CLIPilot:\n${lastLines}`);
+					console.error(`Failed to start Cliclaw:\n${lastLines}`);
 				} else {
-					console.error(`Failed to start CLIPilot. See logs: ${logFile}`);
+					console.error(`Failed to start Cliclaw. See logs: ${logFile}`);
 				}
 			} catch {
-				console.error(`Failed to start CLIPilot. See logs: ${logFile}`);
+				console.error(`Failed to start Cliclaw. See logs: ${logFile}`);
 			}
 			process.exit(1);
 		}
@@ -319,13 +319,13 @@ async function handleStartCommand(args: ReturnType<typeof parseCliArgs>): Promis
 		await sleep(2000);
 		const retryState = await waitForServerState(child.pid, 3000);
 		if (retryState) {
-			console.log(`CLIPilot started in background: ${retryState.url}`);
+			console.log(`Cliclaw started in background: ${retryState.url}`);
 			console.log(`Log file: ${logFile}`);
 			return;
 		}
 
 		const fallbackUrl = `http://${args.host}:${args.port}`;
-		console.log(`CLIPilot started in background: ${fallbackUrl}`);
+		console.log(`Cliclaw started in background: ${fallbackUrl}`);
 		console.log(`Log file: ${logFile}`);
 	} finally {
 		closeSync(fd);
@@ -345,12 +345,12 @@ async function handleStopCommand(args?: { host?: string; port?: number }): Promi
 			console.log(`No state file found, but port ${port} is in use. Attempting to stop by port...`);
 			if (await killByPort(port)) {
 				await waitForPortRelease(host, port);
-				console.log(`Stopped CLIPilot on port ${port}.`);
+				console.log(`Stopped Cliclaw on port ${port}.`);
 			} else {
 				console.error(`Failed to stop process on port ${port}. Try manually: lsof -ti :${port} | xargs kill`);
 			}
 		} else {
-			console.log("CLIPilot is not running.");
+			console.log("Cliclaw is not running.");
 		}
 		return;
 	}
@@ -363,12 +363,12 @@ async function handleStopCommand(args?: { host?: string; port?: number }): Promi
 			await killByPort(port);
 			await waitForPortRelease(host, port);
 		} else {
-			console.log("CLIPilot is not running (cleared stale state).");
+			console.log("Cliclaw is not running (cleared stale state).");
 		}
 		return;
 	}
 
-	// Best-effort: cascade ESC to clipilot tmux panes before stopping server process.
+	// Best-effort: cascade ESC to cliclaw tmux panes before stopping server process.
 	await triggerTmuxEscapeCascade();
 
 	try {
@@ -376,7 +376,7 @@ async function handleStopCommand(args?: { host?: string; port?: number }): Promi
 	} catch (err: any) {
 		if (err?.code === "ESRCH") {
 			await clearServerRuntimeState();
-			console.log("CLIPilot is not running (cleared stale state).");
+			console.log("Cliclaw is not running (cleared stale state).");
 			return;
 		}
 		throw err;
@@ -388,7 +388,7 @@ async function handleStopCommand(args?: { host?: string; port?: number }): Promi
 			await clearServerRuntimeState();
 			// Wait for port release to avoid EADDRINUSE on immediate restart
 			await waitForPortRelease(host, port);
-			console.log(`Stopped CLIPilot: ${state.url}`);
+			console.log(`Stopped Cliclaw: ${state.url}`);
 			return;
 		}
 		await sleep(200);
@@ -407,7 +407,7 @@ async function handleStopCommand(args?: { host?: string; port?: number }): Promi
 
 	await clearServerRuntimeState();
 	await waitForPortRelease(host, port);
-	console.log(`Stopped CLIPilot (forced): ${state.url}`);
+	console.log(`Stopped Cliclaw (forced): ${state.url}`);
 }
 
 async function main(): Promise<void> {
@@ -477,7 +477,7 @@ async function main(): Promise<void> {
 			console.log(`${chalk.green("Remembered:")} ${args.rememberText}`);
 		} else {
 			console.error(chalk.yellow("Please provide text to remember."));
-			console.error('Usage: clipilot remember "your note here"');
+			console.error('Usage: cliclaw remember "your note here"');
 			process.exit(1);
 		}
 		process.exit(0);
@@ -486,8 +486,8 @@ async function main(): Promise<void> {
 	// Handle "init" subcommand
 	if (args.isInit) {
 		const { mkdir, writeFile, access } = await import("node:fs/promises");
-		const clipilotDir = join(args.cwd, ".clipilot");
-		const dirs = [join(clipilotDir, "skills"), join(clipilotDir, "prompts")];
+		const cliclawDir = join(args.cwd, ".cliclaw");
+		const dirs = [join(cliclawDir, "skills"), join(cliclawDir, "prompts")];
 		let created = 0;
 		for (const dir of dirs) {
 			await mkdir(dir, { recursive: true });
@@ -500,17 +500,17 @@ async function main(): Promise<void> {
 			}
 		}
 		if (created > 0) {
-			console.log(chalk.green("Initialized CLIPilot project directories:"));
+			console.log(chalk.green("Initialized Cliclaw project directories:"));
 		} else {
-			console.log(chalk.dim("CLIPilot project directories already exist:"));
+			console.log(chalk.dim("Cliclaw project directories already exist:"));
 		}
-		console.log(`  ${clipilotDir}/skills/`);
-		console.log(`  ${clipilotDir}/prompts/`);
+		console.log(`  ${cliclawDir}/skills/`);
+		console.log(`  ${cliclawDir}/prompts/`);
 		process.exit(0);
 	}
 
 	// ─── Default: Start Server ──────────────────────────
-	const isDaemonProcess = process.env.CLIPILOT_DAEMON === "1";
+	const isDaemonProcess = process.env.CLICLAW_DAEMON === "1";
 
 	await ensureConfigDir();
 	await logger.init();
@@ -519,20 +519,20 @@ async function main(): Promise<void> {
 	if (!isDaemonProcess) {
 		const existingDaemon = await getActiveServerState();
 		if (existingDaemon) {
-			console.error(`CLIPilot is already running as a daemon: ${existingDaemon.url}`);
-			console.error("Run 'clipilot stop' first, or use 'clipilot restart'.");
+			console.error(`Cliclaw is already running as a daemon: ${existingDaemon.url}`);
+			console.error("Run 'cliclaw stop' first, or use 'cliclaw restart'.");
 			process.exit(1);
 		}
 		if (await isPortInUse(args.host, args.port)) {
 			console.error(`Port ${args.port} is already in use.`);
-			console.error("Run 'clipilot stop' first, or use --port to specify a different port.");
+			console.error("Run 'cliclaw stop' first, or use --port to specify a different port.");
 			process.exit(1);
 		}
 	}
 
 	const config = await loadConfig();
 
-	console.log(`${chalk.bold("CLIPilot")} v0.2.0\n`);
+	console.log(`${chalk.bold("Cliclaw")} v0.2.0\n`);
 
 	// Check prerequisites
 	const bridge = new TmuxBridge();
@@ -564,7 +564,7 @@ async function main(): Promise<void> {
 	const promptLoader = new PromptLoader();
 	await promptLoader.load(args.cwd);
 
-	// Initialize project storage directory under ~/.clipilot/projects/
+	// Initialize project storage directory under ~/.cliclaw/projects/
 	const storageDir = await ensureProjectStorageDir(args.cwd);
 	const projectId = getProjectId(args.cwd);
 	logger.info("main", `Project: ${projectId}, storage: ${storageDir}`);

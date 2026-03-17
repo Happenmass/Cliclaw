@@ -291,7 +291,7 @@ describe("ContextManager", () => {
 
 			// Add 4 tool rounds (retention = 2, so first 2 get summarized)
 			const rounds = [
-				buildToolRound("tc_0", "create_session", { session_name: "test" }, 'Session "clipilot-test" created in /tmp'),
+				buildToolRound("tc_0", "create_session", { session_name: "test" }, 'Session "cliclaw-test" created in /tmp'),
 				buildToolRound("tc_1", "send_to_agent", { prompt: "do stuff" }, "[Agent completed] (Task done)\nLong output..."),
 				buildToolRound("tc_2", "exec_command", { command: "ls" }, "src/ test/ package.json"),
 				buildToolRound("tc_3", "respond_to_agent", { value: "y" }, "[Agent completed] (Confirmed)\nMore output"),
@@ -305,7 +305,7 @@ describe("ContextManager", () => {
 			const toolMsgs = prepared.messages.filter((m) => m.role === "tool");
 
 			// First 2 should be summarized
-			expect(toolMsgs[0].content).toBe('[create_session → ✓] Session "clipilot-test" created in /tmp');
+			expect(toolMsgs[0].content).toBe('[create_session → ✓] Session "cliclaw-test" created in /tmp');
 			expect(toolMsgs[1].content).toBe("[send_to_agent → ✓] [Agent completed] (Task done)");
 
 			// Last 2 should be intact

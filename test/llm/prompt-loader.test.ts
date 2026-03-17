@@ -9,7 +9,7 @@ describe("PromptLoader", () => {
 	let builtinDir: string;
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(join(tmpdir(), "clipilot-test-"));
+		tempDir = await mkdtemp(join(tmpdir(), "cliclaw-test-"));
 		builtinDir = join(tempDir, "builtin-prompts");
 		await mkdir(builtinDir, { recursive: true });
 
@@ -35,7 +35,7 @@ describe("PromptLoader", () => {
 	});
 
 	it("should override with project-level .md files", async () => {
-		const promptsDir = join(tempDir, ".clipilot", "prompts");
+		const promptsDir = join(tempDir, ".cliclaw", "prompts");
 		await mkdir(promptsDir, { recursive: true });
 		await writeFile(join(promptsDir, "planner.md"), "Custom planner prompt");
 
@@ -127,7 +127,7 @@ describe("PromptLoader", () => {
 			await writeFile(join(builtinAdaptersDir, "claude-code.md"), "Builtin capabilities");
 
 			// Project-level override
-			const projectAdaptersDir = join(tempDir, ".clipilot", "prompts", "adapters");
+			const projectAdaptersDir = join(tempDir, ".cliclaw", "prompts", "adapters");
 			await mkdir(projectAdaptersDir, { recursive: true });
 			await writeFile(join(projectAdaptersDir, "claude-code.md"), "Project capabilities");
 

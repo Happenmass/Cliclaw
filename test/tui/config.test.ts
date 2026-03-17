@@ -3,7 +3,7 @@ import { SelectListComponent } from "../../src/tui/components/select-list.js";
 import type { SelectItem } from "../../src/tui/components/select-list.js";
 import { TextInputComponent } from "../../src/tui/components/text-input.js";
 import { ConfigView } from "../../src/tui/config-view.js";
-import type { CLIPilotConfig } from "../../src/utils/config.js";
+import type { CliclawConfig } from "../../src/utils/config.js";
 
 describe("SelectListComponent", () => {
 	const items: SelectItem[] = [
@@ -204,7 +204,7 @@ describe("TextInputComponent", () => {
 });
 
 describe("ConfigView", () => {
-	const testConfig: CLIPilotConfig = {
+	const testConfig: CliclawConfig = {
 		defaultAgent: "claude-code",
 		llm: {
 			provider: "anthropic",
@@ -216,7 +216,7 @@ describe("ConfigView", () => {
 			captureLines: 50,
 		},
 		tmux: {
-			sessionPrefix: "clipilot",
+			sessionPrefix: "cliclaw",
 		},
 	};
 

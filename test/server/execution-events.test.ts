@@ -20,7 +20,7 @@ describe("ExecutionEventStore", () => {
 	let tmpDir: string;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "clipilot-exec-events-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-exec-events-"));
 	});
 
 	afterEach(async () => {
