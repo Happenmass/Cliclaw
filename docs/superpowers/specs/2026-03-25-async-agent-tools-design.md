@@ -70,19 +70,18 @@ When MainAgent is in EXECUTING state, incoming messages are queued in MessageQue
 
 Callback messages are constructed with the `[AGENT_CALLBACK ...]` prefix by SessionMonitor. `handleMessage` detects this prefix and handles it differently from human messages:
 
-- **IDLE state**: Callback triggers a new LLM call directly (same as a human message, but injected with `[AGENT_CALLBACK]` prefix instead of raw content)
-- **EXECUTING state**: Callback is queued in MessageQueue. During `executeToolLoop`'s between-round drain, callback messages are identified by their prefix and injected as-is (preserving `[AGENT_CALLBACK]` prefix), NOT wrapped in `[HUMAN]`.
+- **IDLE state**: Callback enters `handleMessage` → `pendingUserMessages` → `drainPendingUserMessages`. The drain logic applies prefix detection (same as EXECUTING path) so callbacks are injected with `[AGENT_CALLBACK]` prefix, not `[HUMAN]`.
+- **EXECUTING state**: Callback is queued in MessageQueue. During `executeToolLoop`'s between-round drain, callback messages are identified by their prefix and injected as-is.
+
+Both drain paths (IDLE's `drainPendingUserMessages` and EXECUTING's `executeToolLoop` drain) use the same prefix detection logic:
 
 ```typescript
-// In executeToolLoop drain logic:
-const queued = this.messageQueue.drain();
-for (const msg of queued) {
-  const isCallback = msg.startsWith("[AGENT_CALLBACK");
-  this.contextManager.addMessage({
-    role: "user",
-    content: isCallback ? msg : `[HUMAN] ${msg}`,
-  });
-}
+// Shared logic in both drain paths:
+const isCallback = msg.startsWith("[AGENT_CALLBACK");
+this.contextManager.addMessage({
+  role: "user",
+  content: isCallback ? msg : `[HUMAN] ${msg}`,
+});
 ```
 
 This ensures LLM always sees the correct message source: `[HUMAN]` for user messages, `[AGENT_CALLBACK ...]` for sub-agent notifications.
@@ -99,7 +98,6 @@ Multiple sessions may complete near-simultaneously. The first callback to arrive
 interface TaskInfo {
   taskId: string;              // Unique ID, e.g. "task_<nanoid>"
   sessionId: string;           // Owning session
-  type: "prompt" | "response"; // Dispatch type
   status: "running" | "waiting_input"; // Task state (settled tasks are removed)
   summary: string;             // Original task summary from send_to_agent
   taskContext: string;         // Task context for StateDetector LLM analysis
@@ -118,14 +116,15 @@ interface BusyResult {
   paneContent: string;         // Latest 100 lines
 }
 
+// SettledEvent reuses the existing ExecutionEvent field types from main-agent.ts
 interface SettledEvent {
   runId: string;
   toolName: string;
   summary: string;
-  pane?: object;
-  workspace?: object;
-  test?: object;
-  verification?: object;
+  pane?: ExecutionPaneSnippet;
+  workspace?: ExecutionWorkspaceEvidence;
+  test?: ExecutionTestEvidence;
+  verification?: ExecutionVerificationEvidence;
 }
 ```
 
@@ -243,16 +242,20 @@ shutdown()
 
 ```
 1. resolveSession(session_id)
-2. sessionMonitor.dispatch(sessionId, paneTarget, { preHash, summary, taskContext: prompt })
-   → dispatched: false → return busy info + 100 lines of agent logs
-   → dispatched: true → continue
-3. adapter.sendPrompt(bridge, paneTarget, prompt)
-4. Return immediately:
+2. sessionMonitor.isBusy(sessionId)
+   → Busy: return current task info + 100 lines of agent logs (via sessionMonitor.dispatch which returns BusyResult)
+   → Free: continue
+3. captureHash(paneTarget) → preHash
+4. adapter.sendPrompt(bridge, paneTarget, prompt)
+5. sessionMonitor.dispatch(sessionId, paneTarget, { preHash, summary, taskContext: prompt })
+6. emitUiEvent("agent_update", summary)
+7. emitExecutionEvent({ phase: "planned", ... })
+8. Return immediately:
    "Task dispatched. task_id: <id>, session: <id>.
     You will receive a callback when the agent finishes."
 ```
 
-Note: `captureHash` → `sendPrompt` → `dispatch` ordering ensures preHash is captured before prompt is sent, and dispatch registers monitoring before returning.
+Ordering: `captureHash` → `sendPrompt` → `dispatch`. This ensures preHash is captured before the prompt changes pane content, and monitoring starts after the prompt is sent. The isBusy check at step 2 can be a fast-path before captureHash to avoid unnecessary work.
 
 Busy response:
 ```
@@ -295,14 +298,14 @@ No restriction on when it can be called. Works during execution, while waiting, 
 ### Callback Message Format
 
 ```
-[AGENT_CALLBACK session_id=<id> task_id=<id> status=<completed|error|waiting_input|timeout|aborted>]
+[AGENT_CALLBACK session_id=<id> task_id=<id> status=<completed|error|waiting_input|timeout|aborted> duration=<seconds>]
 Original task: <summary from send_to_agent>
 Agent task settled with status: <status> (<detail>)
 
 <pane content, last 100 lines>
 ```
 
-Including the original task summary ensures LLM can correlate the callback with the dispatched task, even after multiple conversation turns.
+Including the original task summary and duration ensures LLM can correlate the callback with the dispatched task and assess execution efficiency, even after multiple conversation turns.
 
 ## MainAgent Changes
 
@@ -377,7 +380,7 @@ Add a section on the async agent model:
 | `src/core/session-monitor.ts` | **New** — SessionMonitor class |
 | `src/core/main-agent.ts` | Modify — inject SessionMonitor, simplify tool cases, add cleanup calls, modify drain logic |
 | `src/core/signal-router.ts` | Minor — `notifyPromptSent` now called from SessionMonitor (verify public access) |
-| `src/server/command-router.ts` | Modify — `/stop` command should abort all active tasks via `sessionMonitor.shutdown()` in addition to setting SignalRouter flag |
+| `src/server/command-router.ts` | Modify — `/stop` only pauses MainAgent loop (unchanged); sub-agent tasks continue running. Callbacks arriving while stopped are queued normally. User can terminate individual agents via `kill_session`. |
 | `prompts/main-agent.md` | Modify — add async model guidance, update tool descriptions |
 | `test/core/session-monitor.test.ts` | **New** — unit tests for SessionMonitor |
 | `test/core/main-agent.test.ts` | Modify — update tool tests for non-blocking behavior |
