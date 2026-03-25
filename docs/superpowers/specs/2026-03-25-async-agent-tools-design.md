@@ -6,7 +6,7 @@
 
 ## Solution
 
-Make `send_to_agent` and `respond_to_agent` non-blocking. Extract sub-agent lifecycle monitoring into a new `SessionMonitor` module. Sub-agent state changes (completion, error, waiting for input) are delivered back to MainAgent as callback messages via the existing `handleMessage` entry point.
+Make `send_to_agent` and `respond_to_agent` non-blocking. Extract sub-agent lifecycle monitoring into a new `SessionMonitor` module. Sub-agent state changes (completion, error, waiting for input) are delivered back to MainAgent as callback messages via `handleMessage`, with dedicated handling to distinguish callbacks from human messages.
 
 ## Design Decisions
 
@@ -14,10 +14,10 @@ Make `send_to_agent` and `respond_to_agent` non-blocking. Extract sub-agent life
 |----------|--------|-----------|
 | Tool loop changes | Keep tool loop unchanged | Only agent interaction tools need async; other tools (exec_command, memory) are fast and benefit from sync execution |
 | State management granularity | Per-session | Each tmux session is a physically isolated agent process; one active task per session |
-| Callback delivery | Unified via `handleMessage` | Callbacks are semantically "a message with context"; reusing the existing entry point avoids a parallel channel and lets LLM process them naturally |
+| Callback delivery | Via `handleMessage` with `[AGENT_CALLBACK]` prefix detection | Reuses existing entry point but with dedicated prefix handling to avoid confusion with `[HUMAN]` messages |
 | Monitoring approach | Per-task background polling | Wraps existing `waitForSettled` in a fire-and-forget async loop; avoids global scheduler complexity |
 | Module extraction | New `SessionMonitor` class | `main-agent.ts` is 1400+ lines; session monitoring is an orthogonal concern that benefits from separation |
-| Callback content | Fixed 100 lines of pane content | Simple, consistent, matches current `capturePane` behavior; LLM can use `inspect_session` for more |
+| Callback content | Fixed 100 lines of pane content + original task summary | Simple, consistent, self-contained — LLM can use `inspect_session` for more |
 
 ## Architecture
 
@@ -34,8 +34,9 @@ SessionMonitor (src/core/session-monitor.ts)  [NEW]
 ├── Task lifecycle (register / query / cleanup)
 ├── Per-session busy state
 ├── Per-task background polling (reuses StateDetector)
-├── Callback message construction
-└── Notifies MainAgent via injected onCallback function
+├── Callback message construction (includes original task summary)
+├── Notifies MainAgent via injected onCallback function
+└── Optionally emits structured onSettled events for execution tracking
 
 StateDetector (src/tmux/state-detector.ts)  [unchanged]
 └── Reused by SessionMonitor for waitForSettled polling
@@ -51,10 +52,44 @@ this.sessionMonitor = new SessionMonitor({
   onCallback: (message: string) => {
     this.handleMessage(message);
   },
+  onSettled: (event: SettledEvent) => {
+    this.emitExecutionEvent({ ...event, phase: "settled" });
+  },
 });
 ```
 
-SessionMonitor does not depend on MainAgent. It communicates outward solely through the `onCallback` function injected at construction time.
+SessionMonitor does not depend on MainAgent. It communicates outward through injected callback functions: `onCallback` for message injection, `onSettled` (optional) for structured execution events.
+
+## Callback Message Handling
+
+### Problem: Distinguishing Callbacks from Human Messages
+
+When MainAgent is in EXECUTING state, incoming messages are queued in MessageQueue and later injected with `[HUMAN]` prefix. Callback messages must NOT be treated as human messages.
+
+### Solution: Prefix-Based Detection in handleMessage
+
+Callback messages are constructed with the `[AGENT_CALLBACK ...]` prefix by SessionMonitor. `handleMessage` detects this prefix and handles it differently from human messages:
+
+- **IDLE state**: Callback triggers a new LLM call directly (same as a human message, but injected with `[AGENT_CALLBACK]` prefix instead of raw content)
+- **EXECUTING state**: Callback is queued in MessageQueue. During `executeToolLoop`'s between-round drain, callback messages are identified by their prefix and injected as-is (preserving `[AGENT_CALLBACK]` prefix), NOT wrapped in `[HUMAN]`.
+
+```typescript
+// In executeToolLoop drain logic:
+const queued = this.messageQueue.drain();
+for (const msg of queued) {
+  const isCallback = msg.startsWith("[AGENT_CALLBACK");
+  this.contextManager.addMessage({
+    role: "user",
+    content: isCallback ? msg : `[HUMAN] ${msg}`,
+  });
+}
+```
+
+This ensures LLM always sees the correct message source: `[HUMAN]` for user messages, `[AGENT_CALLBACK ...]` for sub-agent notifications.
+
+### Concurrent Callback Safety
+
+Multiple sessions may complete near-simultaneously. The first callback to arrive when IDLE triggers `handleMessage` → EXECUTING. Subsequent callbacks are queued in MessageQueue and processed in the next between-round drain. This is safe — each callback is self-contained with its own session_id, task_id, summary, and pane content.
 
 ## SessionMonitor Internal Design
 
@@ -66,16 +101,31 @@ interface TaskInfo {
   sessionId: string;           // Owning session
   type: "prompt" | "response"; // Dispatch type
   status: "running" | "waiting_input"; // Task state (settled tasks are removed)
+  summary: string;             // Original task summary from send_to_agent
+  taskContext: string;         // Task context for StateDetector LLM analysis
   preHash: string;             // Pane content hash before dispatch
   startedAt: number;           // Timestamp
-  abortController: { aborted: boolean }; // Per-task abort flag
+  abortController: AbortController; // Per-task abort (Node.js native)
 }
 
+type DispatchResult =
+  | { dispatched: true; task: TaskInfo }
+  | { dispatched: false; busy: BusyResult };
+
 interface BusyResult {
-  busy: true;
   sessionId: string;
   currentTask: TaskInfo;
   paneContent: string;         // Latest 100 lines
+}
+
+interface SettledEvent {
+  runId: string;
+  toolName: string;
+  summary: string;
+  pane?: object;
+  workspace?: object;
+  test?: object;
+  verification?: object;
 }
 ```
 
@@ -89,10 +139,15 @@ class SessionMonitor {
     stateDetector: StateDetector;
     bridge: TmuxBridge;
     onCallback: (message: string) => void;
+    onSettled?: (event: SettledEvent) => void;
   });
 
-  dispatch(sessionId: string, paneTarget: string, preHash: string): TaskInfo | BusyResult;
-  resumeTask(sessionId: string, newPreHash: string): void;
+  dispatch(sessionId: string, paneTarget: string, opts: {
+    preHash: string;
+    summary: string;
+    taskContext?: string;
+  }): DispatchResult;
+  resumeTask(sessionId: string, newPreHash: string): boolean;
   isBusy(sessionId: string): boolean;
   getTask(sessionId: string): TaskInfo | null;
   getAllTasks(): TaskInfo[];
@@ -105,36 +160,43 @@ class SessionMonitor {
 
 ```
 dispatch() called
-  → isBusy? → yes: return BusyResult with 100 lines of pane content
-  → Create TaskInfo, store in Map
+  → isBusy? → yes: return { dispatched: false, busy: BusyResult }
+  → Create TaskInfo (with summary, taskContext), store in Map
+  → Call signalRouter.notifyPromptSent(taskContext) for capture line expansion
   → Fire-and-forget async polling loop:
-      → stateDetector.waitForSettled(paneTarget, { preHash, isAborted })
+      → stateDetector.waitForSettled(paneTarget, taskContext, {
+          preHash,
+          isAborted: () => abortController.signal.aborted
+        })
       → On settle:
           if waiting_input:
             → Update task status to "waiting_input"
-            → Fire callback (status=waiting_input)
+            → Fire onCallback (status=waiting_input, include summary)
             → Pause polling (wait for resumeTask)
           if completed/error/timeout:
             → Capture 100 lines of pane content
             → Collect workspace evidence
-            → Fire callback (status=completed/error/timeout)
+            → Fire onCallback (status=completed/error/timeout, include summary)
+            → Fire onSettled (structured event) if provided
             → Remove task from Map
       → On exception:
-          → Fire callback with error info
+          → Fire onCallback with error info and summary
           → Remove task from Map
-  → Return TaskInfo immediately (do not await polling)
+  → Return { dispatched: true, task: TaskInfo } immediately
 ```
 
 ### resumeTask Flow
 
-Called by `respond_to_agent` after sending keys:
+Called by `respond_to_agent` after sending keys. Returns `true` on success, `false` if task not found or not in `waiting_input` state.
 
 ```
-resumeTask(sessionId, newPreHash)
-  → Get task from Map (must be in waiting_input status)
+resumeTask(sessionId, newPreHash) → boolean
+  → Get task from Map
+  → If not found or status != waiting_input: return false
   → Update preHash to newPreHash
   → Set status back to "running"
   → Restart async polling loop with new preHash
+  → Return true
 ```
 
 ### Task State Transitions
@@ -158,9 +220,21 @@ resumeTask(sessionId, newPreHash)
          │ (also possible: timeout while waiting)
          ▼
   ┌────────────┐
-  │  settled   │ → fire callback → remove from Map
+  │  settled   │ → fire callbacks → remove from Map
   └────────────┘
   (completed / error / timeout)
+```
+
+### Shutdown Behavior
+
+`shutdown()` aborts all active tasks via their AbortControllers. Each aborted polling loop fires a callback with `status=aborted` before exiting, so MainAgent is informed that tasks were forcefully terminated.
+
+```
+shutdown()
+  → For each active task in Map:
+      → task.abortController.abort()
+      → (polling loop detects abort, fires callback with status=aborted, removes from Map)
+  → Clear Map
 ```
 
 ## Tool Behavior Changes
@@ -169,16 +243,16 @@ resumeTask(sessionId, newPreHash)
 
 ```
 1. resolveSession(session_id)
-2. sessionMonitor.isBusy(sessionId)
-   → Busy: return current task info + 100 lines of agent logs
-   → Free: continue
-3. captureHash(paneTarget) → preHash
-4. adapter.sendPrompt(bridge, paneTarget, prompt)
-5. sessionMonitor.dispatch(sessionId, paneTarget, preHash) → taskInfo
-6. Return immediately:
+2. sessionMonitor.dispatch(sessionId, paneTarget, { preHash, summary, taskContext: prompt })
+   → dispatched: false → return busy info + 100 lines of agent logs
+   → dispatched: true → continue
+3. adapter.sendPrompt(bridge, paneTarget, prompt)
+4. Return immediately:
    "Task dispatched. task_id: <id>, session: <id>.
     You will receive a callback when the agent finishes."
 ```
+
+Note: `captureHash` → `sendPrompt` → `dispatch` ordering ensures preHash is captured before prompt is sent, and dispatch registers monitoring before returning.
 
 Busy response:
 ```
@@ -198,6 +272,8 @@ Busy response:
 3. adapter.sendResponse(bridge, paneTarget, value)
 4. captureHash(paneTarget) → newPreHash
 5. sessionMonitor.resumeTask(sessionId, newPreHash)
+   → false: return error "Failed to resume task"
+   → true: continue
 6. Return immediately:
    "Response sent, agent continuing execution."
 ```
@@ -207,22 +283,26 @@ Busy response:
 ```
 1. resolveSession(session_id)
 2. bridge.capturePane(paneTarget, { startLine: -lines })
+   → If session/pane not found: return friendly error
 3. sessionMonitor.getTask(sessionId) → optional status summary
 4. Return:
    "[Session <id>] Status: <running|waiting_input|idle>
     <pane content>"
 ```
 
-No restriction on when it can be called. Works during execution, while waiting, or after completion.
+No restriction on when it can be called. Works during execution, while waiting, or after completion. Handles destroyed sessions gracefully.
 
 ### Callback Message Format
 
 ```
-[AGENT_CALLBACK session_id=<id> task_id=<id> status=<completed|error|waiting_input|timeout>]
+[AGENT_CALLBACK session_id=<id> task_id=<id> status=<completed|error|waiting_input|timeout|aborted>]
+Original task: <summary from send_to_agent>
 Agent task settled with status: <status> (<detail>)
 
 <pane content, last 100 lines>
 ```
+
+Including the original task summary ensures LLM can correlate the callback with the dispatched task, even after multiple conversation turns.
 
 ## MainAgent Changes
 
@@ -232,16 +312,28 @@ From `send_to_agent` and `respond_to_agent` case branches:
 - `stateDetector.waitForSettled()` calls
 - `captureAnsiPaneContent()` and `buildPaneSnippet()`
 - `collectWorkspaceEvidence()` and `extractTestEvidence()`
-- `emitExecutionEvent({ phase: "settled" })`
+- `emitExecutionEvent({ phase: "settled" })` (moved to SessionMonitor's onSettled callback)
 
 These responsibilities move into SessionMonitor's callback logic.
 
+### Code to Migrate
+
+- `signalRouter.notifyPromptSent()`: moves into `SessionMonitor.dispatch()` — called with taskContext to enable capture line expansion
+- `collectWorkspaceEvidence()` and `extractTestEvidence()`: called by SessionMonitor before firing onSettled
+
+### Code to Modify
+
+- `handleMessage()`: no structural change, but the `enqueueMessageForExecutingState` path must preserve callback messages as-is
+- `executeToolLoop()` between-round drain: detect `[AGENT_CALLBACK` prefix and inject without `[HUMAN]` wrapper
+- `exit_agent` / `kill_session`: add `sessionMonitor.cleanup(id)` before `sessions.delete(id)`
+- Shutdown handler: add `sessionMonitor.shutdown()`
+
 ### Code to Keep Unchanged
 
-- Tool loop (`executeToolLoop`) — no changes
+- Tool loop (`executeToolLoop`) — structure unchanged (only drain logic adds prefix detection)
 - State machine (IDLE ↔ EXECUTING) — no changes
 - MessageQueue — no changes
-- SignalRouter — retained but no longer used by agent tools (per-task abort replaces it)
+- SignalRouter — retained, `notifyPromptSent` still called (from SessionMonitor)
 - `emitExecutionEvent({ phase: "planned" })` — stays in tool call site
 
 ### Session Lifecycle Integration
@@ -256,7 +348,7 @@ shutdown        → sessionMonitor.shutdown()
 ### Execution Events
 
 - `planned` phase: emitted synchronously at tool call site (unchanged)
-- `settled` phase: SessionMonitor includes workspace/test evidence in callback; MainAgent can emit the event when processing the callback, or delegate to SessionMonitor via an optional `onExecutionEvent` callback. Preferred: keep SessionMonitor unaware of execution events; include evidence in callback message for LLM to act on.
+- `settled` phase: emitted by MainAgent via the `onSettled` callback injected into SessionMonitor. SessionMonitor collects workspace/test evidence and passes structured data to `onSettled`. This keeps SessionMonitor unaware of ExecutionEvent types while ensuring events are still emitted.
 
 ## Prompt Updates
 
@@ -283,7 +375,9 @@ Add a section on the async agent model:
 | File | Change |
 |------|--------|
 | `src/core/session-monitor.ts` | **New** — SessionMonitor class |
-| `src/core/main-agent.ts` | Modify — inject SessionMonitor, simplify tool cases, add cleanup calls |
+| `src/core/main-agent.ts` | Modify — inject SessionMonitor, simplify tool cases, add cleanup calls, modify drain logic |
+| `src/core/signal-router.ts` | Minor — `notifyPromptSent` now called from SessionMonitor (verify public access) |
+| `src/server/command-router.ts` | Modify — `/stop` command should abort all active tasks via `sessionMonitor.shutdown()` in addition to setting SignalRouter flag |
 | `prompts/main-agent.md` | Modify — add async model guidance, update tool descriptions |
 | `test/core/session-monitor.test.ts` | **New** — unit tests for SessionMonitor |
 | `test/core/main-agent.test.ts` | Modify — update tool tests for non-blocking behavior |
