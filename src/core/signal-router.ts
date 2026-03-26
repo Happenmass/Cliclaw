@@ -124,7 +124,7 @@ export class SignalRouter extends EventEmitter<SignalRouterEvents> {
 
 		// If we need more lines and the current content seems limited, re-capture
 		if (captureLines > this.defaultLines && paneContent.split("\n").length <= this.defaultLines) {
-			// Content may have been captured with default lines; signal handler can use fetch_more
+			// Content may have been captured with default lines; signal handler can use inspect_session
 		}
 
 		if (this.isActiveAndConfident(analysis)) {

@@ -181,6 +181,7 @@ describe("Integration: Chat mode end-to-end", () => {
 			stateDetector: stateDetector as any,
 			broadcaster,
 		});
+		mainAgent.setupSessionMonitor();
 
 		await mainAgent.handleMessage("Build a feature");
 
@@ -188,7 +189,7 @@ describe("Integration: Chat mode end-to-end", () => {
 		expect(adapter.launch).toHaveBeenCalledTimes(1);
 		expect(adapter.sendPrompt).toHaveBeenCalledWith(bridge, "test-session:0.0", "Implement the feature");
 		expect(stateDetector.captureHash).toHaveBeenCalled();
-		expect(stateDetector.waitForSettled).toHaveBeenCalled();
+		// send_to_agent now dispatches async via SessionMonitor — no direct waitForSettled call
 		expect(broadcaster.broadcast).toHaveBeenCalledWith({
 			type: "agent_update",
 			summary: "Implementing feature",
@@ -223,10 +224,10 @@ describe("Integration: Chat mode end-to-end", () => {
 		);
 	});
 
-	it("should handle multi-step tool use: create_session → fetch_more → send_to_agent → complete", async () => {
+	it("should handle multi-step tool use: create_session → inspect_session → send_to_agent → complete", async () => {
 		const llmClient = createMockStreamingLLM([
 			toolCallEvents("create_session", {}, "tc0"),
-			toolCallEvents("fetch_more", { lines: 200 }, "tc1"),
+			toolCallEvents("inspect_session", { lines: 200 }, "tc1"),
 			toolCallEvents("send_to_agent", { prompt: "Fix the bug", summary: "Fixing bug" }, "tc2"),
 			toolCallEvents("mark_complete", { summary: "Bug fixed" }, "tc3"),
 		]);
@@ -242,13 +243,14 @@ describe("Integration: Chat mode end-to-end", () => {
 			stateDetector: stateDetector as any,
 			broadcaster,
 		});
+		mainAgent.setupSessionMonitor();
 
 		await mainAgent.handleMessage("Fix bugs");
 
 		expect(mainAgent.state).toBe("idle");
 		expect(bridge.capturePane).toHaveBeenCalledWith("test-session:0.0", { startLine: -200 });
 		expect(adapter.sendPrompt).toHaveBeenCalledWith(bridge, "test-session:0.0", "Fix the bug");
-		expect(stateDetector.waitForSettled).toHaveBeenCalled();
+		// send_to_agent now dispatches async via SessionMonitor — no direct waitForSettled call
 	});
 
 	it("should handle goal failure via mark_failed tool", async () => {
