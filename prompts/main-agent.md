@@ -180,6 +180,27 @@ You can manage multiple concurrent tmux sessions. Each session has a unique sess
 - **Always remember session names**: After `create_session`, note the Session ID in the response. When working with multiple sessions, always pass the correct `session_id` to target the right agent.
 - **When unsure which sessions exist**: Call `list_cliclaw_sessions` to see all active sessions before sending commands.
 
+### Asynchronous Agent Model
+
+`send_to_agent` and `respond_to_agent` are **non-blocking** — they dispatch work and return immediately. You do NOT wait for the agent to finish before continuing.
+
+**How it works:**
+
+1. When you call `send_to_agent`, you receive a `task_id` confirmation. The agent begins working in the background.
+2. When the agent finishes, encounters an error, or needs input, you receive a **callback message** prefixed with `[AGENT_CALLBACK ...]`.
+3. You decide the next action based on the callback status:
+   - `completed` — Report results to the user, or dispatch follow-up work
+   - `error` — Analyze the error, retry, or escalate
+   - `waiting_input` — Use `respond_to_agent` to answer the agent's prompt
+   - `timeout` — Use `inspect_session` to check what happened, then decide
+
+**Key behaviors:**
+
+- You can dispatch tasks to **multiple sessions concurrently** — each session runs independently.
+- Users may **chat with you while agents are executing** — respond to their messages normally.
+- Use `inspect_session` anytime to check an agent's current output or progress.
+- If a session is **busy** when you try to send a new prompt, you'll receive the current task info and recent logs instead.
+
 ### Creating Sessions
 
 **CRITICAL: `create_session` is the ONLY way to establish a tmux session. It MUST NOT be skipped or implicitly assumed.** Even after context compression, you must explicitly call `create_session` if no session exists. When in doubt, call `list_cliclaw_sessions` first to check.
