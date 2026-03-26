@@ -15,6 +15,7 @@ import { LLMClient } from "./llm/client.js";
 import { PromptLoader } from "./llm/prompt-loader.js";
 import { getAllProviders } from "./llm/providers/registry.js";
 import { createEmbeddingProvider } from "./memory/embedder.js";
+import { loadPersistentMemory } from "./memory/persistent.js";
 import { MemoryStore } from "./memory/store.js";
 import { syncMemoryFiles } from "./memory/sync.js";
 import { ConversationStore } from "./persistence/conversation-store.js";
@@ -33,6 +34,7 @@ import { runConfigTUI } from "./tui/config-app.js";
 import {
 	clearServerRuntimeState,
 	ensureConfigDir,
+	getConfigDir,
 	getLogsDir,
 	ensureProjectStorageDir,
 	getGlobalDbPath,
@@ -480,20 +482,17 @@ async function main(): Promise<void> {
 	// Handle "remember" subcommand
 	if (args.rememberText !== undefined) {
 		if (args.rememberText) {
-			const rememberStorageDir = getProjectStorageDir(args.cwd);
-			const store = new MemoryStore({
-				dbPath: getGlobalDbPath(),
-				projectId: getProjectId(args.cwd),
-				workspaceDir: args.cwd,
-				storageDir: rememberStorageDir,
-				vectorEnabled: false,
-			});
-			await store.write({ path: "memory/core.md", content: `\n- ${args.rememberText}` });
-			store.close();
-			console.log(`${chalk.green("Remembered:")} ${args.rememberText}`);
+			const { appendToPersistentMemory } = await import("./memory/persistent.js");
+			const targetPath = args.global
+				? join(getConfigDir(), "MEMORY.md")
+				: join(args.cwd, ".cliclaw", "MEMORY.md");
+			await appendToPersistentMemory(targetPath, "active_notes", args.rememberText);
+			const scope = args.global ? "global" : "project";
+			console.log(`${chalk.green("Remembered")} (${scope}): ${args.rememberText}`);
 		} else {
 			console.error(chalk.yellow("Please provide text to remember."));
 			console.error('Usage: cliclaw remember "your note here"');
+			console.error("  --global/-g  Save to global memory instead of project memory");
 			process.exit(1);
 		}
 		process.exit(0);
@@ -691,6 +690,19 @@ async function main(): Promise<void> {
 	const baseCapabilities = adapterCapabilities || "Direct code editing and file operations\nRunning terminal commands";
 	const capabilitiesSummary = buildCapabilitiesSummary(baseCapabilities, filteredSkills);
 	contextManager.updateModule("agent_capabilities", capabilitiesSummary);
+
+	// Load persistent memory (MEMORY.md) into {{memory}} module
+	const globalDir = getConfigDir();
+	try {
+		const persistentMemory = await loadPersistentMemory(globalDir, args.cwd);
+		if (persistentMemory) {
+			contextManager.updateModule("memory", persistentMemory);
+			logger.info("main", "Persistent memory loaded into context");
+		}
+	} catch (err: any) {
+		logger.warn("main", `Failed to load persistent memory (non-fatal): ${err.message}`);
+	}
+
 	const openspecCmds = defaultAdapter.getOpenSpecCommands?.() ?? {
 		toolName: "claude",
 		explore: "/opsx:explore",
@@ -725,6 +737,8 @@ async function main(): Promise<void> {
 		syncMemory,
 		embeddingProvider,
 		skillRegistry,
+		globalDir,
+		workspaceDir: args.cwd,
 		debug: config.debug,
 		searchConfig: {
 			vectorWeight: config.memory.vectorWeight,

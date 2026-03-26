@@ -14,6 +14,7 @@ export interface CLIArgs {
 	version: boolean;
 	cwd: string;
 	rememberText: string | undefined;
+	global: boolean;
 }
 
 export function parseCliArgs(): CLIArgs {
@@ -31,6 +32,7 @@ export function parseCliArgs(): CLIArgs {
 			help: { type: "boolean", short: "h", default: false },
 			version: { type: "boolean", short: "v", default: false },
 			cwd: { type: "string", default: process.cwd() },
+			global: { type: "boolean", short: "g", default: false },
 		},
 	});
 
@@ -54,6 +56,7 @@ export function parseCliArgs(): CLIArgs {
 		version: values.version as boolean,
 		cwd: values.cwd as string,
 		rememberText,
+		global: values.global as boolean,
 	};
 }
 
@@ -74,7 +77,8 @@ Subcommands:
   stop                    Stop the background server
   restart                 Restart the background server (stop + start)
   init                    Initialize project-level skills and prompts directories
-  remember <text>         Save a note to project memory for future sessions
+  remember <text>         Save a note to persistent memory (MEMORY.md) for future sessions
+                          Use --global/-g to save to global memory instead of project memory
   config                  Open configuration TUI
   doctor                  Run health checks on the CLI environment
 

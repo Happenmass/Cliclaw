@@ -8,6 +8,7 @@ import type { AgentAdapter } from "../agents/adapter.js";
 import type { LLMClient } from "../llm/client.js";
 import type { LLMMessage, LLMStreamEvent, MessageContent, ToolCallContent, ToolDefinition } from "../llm/types.js";
 import { buildCategoryPathFilter } from "../memory/category.js";
+import { loadPersistentMemory, readPersistentMemory, updatePersistentMemory } from "../memory/persistent.js";
 import { searchMemory } from "../memory/search.js";
 import type { MemoryStore } from "../memory/store.js";
 import type { EmbeddingProvider, HybridSearchConfig, MemoryCategory } from "../memory/types.js";
@@ -271,6 +272,42 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 		},
 	},
 	{
+		name: "persistent_memory",
+		description:
+			"Read or update the persistent MEMORY.md that is always loaded into your system prompt. Use this when the user asks you to remember/forget something, or when you need to review current memories.",
+		parameters: {
+			type: "object",
+			properties: {
+				action: {
+					type: "string",
+					enum: ["read", "update"],
+					description: "read: return current MEMORY.md content. update: add/modify/remove entries.",
+				},
+				scope: {
+					type: "string",
+					enum: ["project", "global"],
+					description: "project: workspace-level. global: ~/.cliclaw/. Default: project.",
+				},
+				section: {
+					type: "string",
+					enum: ["user_profile", "project_conventions", "key_decisions", "people_and_context", "active_notes"],
+					description: "Target section. Required when action is update.",
+				},
+				operation: {
+					type: "string",
+					enum: ["append", "remove", "replace"],
+					description:
+						"append: add entry. remove: delete matching entry. replace: rewrite section. Default: append.",
+				},
+				content: {
+					type: "string",
+					description: "The memory content to write/match/replace.",
+				},
+			},
+			required: ["action"],
+		},
+	},
+	{
 		name: "exec_command",
 		description:
 			"Execute a bash command directly for read-only reconnaissance. Use for reading files, browsing directories, searching code, and checking environment info. NEVER use for modifications, tests, builds, git operations, or any command with side effects — those MUST go through send_to_agent.",
@@ -323,6 +360,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private firstLLMCall = true;
 	private execCommandBroadcastCount = 0;
 	private sessionMonitor: SessionMonitor | null = null;
+	private globalDir: string;
+	private workspaceDir: string;
 	private searchConfig: HybridSearchConfig = {
 		enabled: true,
 		vectorWeight: 0.7,
@@ -349,6 +388,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		embeddingProvider?: EmbeddingProvider | null;
 		searchConfig?: Partial<HybridSearchConfig>;
 		skillRegistry?: SkillRegistry;
+		globalDir?: string;
+		workspaceDir?: string;
 		debug?: boolean;
 	}) {
 		super();
@@ -365,6 +406,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.syncMemory = opts.syncMemory ?? null;
 		this.embeddingProvider = opts.embeddingProvider ?? null;
 		this.skillRegistry = opts.skillRegistry ?? null;
+		this.globalDir = opts.globalDir ?? "";
+		this.workspaceDir = opts.workspaceDir ?? "";
 		this.debug = opts.debug ?? false;
 		if (opts.searchConfig) {
 			this.searchConfig = { ...this.searchConfig, ...opts.searchConfig };
@@ -1330,6 +1373,50 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					return { output: `Written to ${result.path} successfully.`, terminal: false };
 				} catch (err: any) {
 					return { output: `Memory write error: ${err.message}`, terminal: false };
+				}
+			}
+
+			case "persistent_memory": {
+				const action = args.action as string;
+				const scope = (args.scope as string) ?? "project";
+				const filePath =
+					scope === "global"
+						? join(this.globalDir, "MEMORY.md")
+						: join(this.workspaceDir, ".cliclaw", "MEMORY.md");
+
+				try {
+					if (action === "read") {
+						const content = await readPersistentMemory(filePath);
+						if (!content) {
+							return { output: `No MEMORY.md found at ${scope} scope.`, terminal: false };
+						}
+						return { output: content, terminal: false };
+					}
+
+					// action === "update"
+					const section = args.section as string;
+					const operation = (args.operation as "append" | "remove" | "replace") ?? "append";
+					const content = args.content as string;
+
+					if (!section) {
+						return { output: "Error: 'section' is required for update action.", terminal: false };
+					}
+					if (!content) {
+						return { output: "Error: 'content' is required for update action.", terminal: false };
+					}
+
+					await updatePersistentMemory({ filePath, section, operation, content });
+
+					// Hot-reload: re-merge and update {{memory}} module
+					const merged = await loadPersistentMemory(this.globalDir, this.workspaceDir);
+					this.contextManager.updateModule("memory", merged);
+
+					return {
+						output: `Persistent memory updated (${scope}/${section}/${operation}). System prompt refreshed.`,
+						terminal: false,
+					};
+				} catch (err: any) {
+					return { output: `Persistent memory error: ${err.message}`, terminal: false };
 				}
 			}
 

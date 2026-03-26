@@ -700,6 +700,75 @@ describe("MainAgent State Machine", () => {
 		});
 	});
 
+	describe("persistent_memory tool", () => {
+		it("should read persistent memory file", async () => {
+			const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+			const { tmpdir } = await import("node:os");
+			const { join } = await import("node:path");
+			const tempDir = await mkdtemp(join(tmpdir(), "pm-test-"));
+
+			try {
+				const globalDir = join(tempDir, "global");
+				const { mkdir } = await import("node:fs/promises");
+				await mkdir(globalDir, { recursive: true });
+				await writeFile(join(globalDir, "MEMORY.md"), "# Memory\n\n## User Profile\n- Test user\n");
+
+				const agent = setupAgent(
+					[
+						toolCallResponse("persistent_memory", { action: "read", scope: "global" }),
+						textResponse("Here is your memory."),
+					],
+					{ globalDir, workspaceDir: tempDir },
+				);
+
+				await agent.handleMessage("show memory");
+
+				// Tool result should contain the memory content
+				const addMessageCalls = mockCtx.addMessage.mock.calls;
+				const toolResultCall = addMessageCalls.find(
+					(c: any) => c[0].role === "tool" && typeof c[0].content === "string" && c[0].content.includes("Test user"),
+				);
+				expect(toolResultCall).toBeTruthy();
+			} finally {
+				await rm(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it("should update persistent memory and hot-reload", async () => {
+			const { mkdtemp, rm, mkdir } = await import("node:fs/promises");
+			const { tmpdir } = await import("node:os");
+			const { join } = await import("node:path");
+			const tempDir = await mkdtemp(join(tmpdir(), "pm-test-"));
+
+			try {
+				const globalDir = join(tempDir, "global");
+				const workspaceDir = join(tempDir, "workspace");
+				await mkdir(join(workspaceDir, ".cliclaw"), { recursive: true });
+
+				const agent = setupAgent(
+					[
+						toolCallResponse("persistent_memory", {
+							action: "update",
+							scope: "project",
+							section: "active_notes",
+							operation: "append",
+							content: "Remember this",
+						}),
+						textResponse("Remembered."),
+					],
+					{ globalDir, workspaceDir },
+				);
+
+				await agent.handleMessage("remember this");
+
+				// Should have called updateModule to hot-reload
+				expect(mockCtx.updateModule).toHaveBeenCalledWith("memory", expect.stringContaining("Remember this"));
+			} finally {
+				await rm(tempDir, { recursive: true, force: true });
+			}
+		});
+	});
+
 	describe("exec_command tool_activity broadcasting", () => {
 		it("should broadcast tool_activity on first exec_command call", async () => {
 			const agent = setupAgent([
