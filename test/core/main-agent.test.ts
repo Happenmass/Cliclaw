@@ -187,7 +187,11 @@ describe("MainAgent State Machine", () => {
 	let mockBridge: ReturnType<typeof createMockBridge>;
 	let mockDetector: ReturnType<typeof createMockStateDetector>;
 
-	function setupAgent(responses: LLMStreamEvent[][], overrides: Record<string, any> = {}) {
+	function setupAgent(
+		responses: LLMStreamEvent[][],
+		overrides: Record<string, any> = {},
+		{ withMonitor = false }: { withMonitor?: boolean } = {},
+	) {
 		mockCtx = createMockContextManager();
 		mockRouter = createMockSignalRouter();
 		mockBroadcaster = createMockBroadcaster();
@@ -197,7 +201,7 @@ describe("MainAgent State Machine", () => {
 
 		const mockLLM = createMockStreamingLLM(responses);
 
-		return new MainAgent({
+		const agent = new MainAgent({
 			contextManager: mockCtx,
 			signalRouter: mockRouter,
 			llmClient: mockLLM,
@@ -207,6 +211,12 @@ describe("MainAgent State Machine", () => {
 			broadcaster: mockBroadcaster,
 			...overrides,
 		});
+
+		if (withMonitor) {
+			agent.setupSessionMonitor();
+		}
+
+		return agent;
 	}
 
 	describe("initial state", () => {
@@ -343,11 +353,15 @@ describe("MainAgent State Machine", () => {
 		it("should queue message and send system notification", async () => {
 			// Setup: first call returns a tool that blocks (create_session + send_to_agent)
 			// But simpler: just set the state to executing manually by sending a message that triggers tools
-			const agent = setupAgent([
-				toolCallResponse("create_session", {}, "tc0"),
-				toolCallResponse("send_to_agent", { prompt: "work", summary: "Working" }, "tc1"),
-				toolCallResponse("mark_complete", { summary: "Done" }, "tc2"),
-			]);
+			const agent = setupAgent(
+				[
+					toolCallResponse("create_session", {}, "tc0"),
+					toolCallResponse("send_to_agent", { prompt: "work", summary: "Working" }, "tc1"),
+					toolCallResponse("mark_complete", { summary: "Done" }, "tc2"),
+				],
+				{},
+				{ withMonitor: true },
+			);
 
 			// Start a task that will enter EXECUTING
 			const handlePromise = agent.handleMessage("do a task");
@@ -362,14 +376,22 @@ describe("MainAgent State Machine", () => {
 
 	describe("IDLE → EXECUTING → IDLE flow", () => {
 		it("should complete full flow: text + tool call → execute → mark_complete → idle", async () => {
-			const agent = setupAgent([
-				// First LLM call: tool call
-				toolCallResponse("create_session", {}, "tc0", "I'll create a session."),
-				// Second LLM call (after create_session result): send_to_agent
-				toolCallResponse("send_to_agent", { prompt: "implement feature", summary: "Implementing feature" }, "tc1"),
-				// Third LLM call (after send_to_agent result): mark_complete
-				toolCallResponse("mark_complete", { summary: "Feature implemented" }, "tc2"),
-			]);
+			const agent = setupAgent(
+				[
+					// First LLM call: tool call
+					toolCallResponse("create_session", {}, "tc0", "I'll create a session."),
+					// Second LLM call (after create_session result): send_to_agent (returns immediately)
+					toolCallResponse(
+						"send_to_agent",
+						{ prompt: "implement feature", summary: "Implementing feature" },
+						"tc1",
+					),
+					// Third LLM call (after send_to_agent dispatch result): mark_complete
+					toolCallResponse("mark_complete", { summary: "Feature implemented" }, "tc2"),
+				],
+				{},
+				{ withMonitor: true },
+			);
 
 			await agent.handleMessage("implement the feature");
 
@@ -387,11 +409,15 @@ describe("MainAgent State Machine", () => {
 
 	describe("tool summary broadcasting", () => {
 		it("should broadcast agent_update for send_to_agent with summary", async () => {
-			const agent = setupAgent([
-				toolCallResponse("create_session", {}, "tc0"),
-				toolCallResponse("send_to_agent", { prompt: "add auth", summary: "Adding JWT auth" }, "tc1"),
-				toolCallResponse("mark_complete", { summary: "Done" }, "tc2"),
-			]);
+			const agent = setupAgent(
+				[
+					toolCallResponse("create_session", {}, "tc0"),
+					toolCallResponse("send_to_agent", { prompt: "add auth", summary: "Adding JWT auth" }, "tc1"),
+					toolCallResponse("mark_complete", { summary: "Done" }, "tc2"),
+				],
+				{},
+				{ withMonitor: true },
+			);
 
 			await agent.handleMessage("add auth");
 
@@ -401,12 +427,16 @@ describe("MainAgent State Machine", () => {
 			});
 		});
 
-		it("should broadcast execution_event evidence for create_session and send_to_agent", async () => {
-			const agent = setupAgent([
-				toolCallResponse("create_session", {}, "tc0"),
-				toolCallResponse("send_to_agent", { prompt: "add auth", summary: "Adding JWT auth" }, "tc1"),
-				toolCallResponse("mark_complete", { summary: "Done" }, "tc2"),
-			]);
+		it("should broadcast execution_event planned phase for create_session and send_to_agent", async () => {
+			const agent = setupAgent(
+				[
+					toolCallResponse("create_session", {}, "tc0"),
+					toolCallResponse("send_to_agent", { prompt: "add auth", summary: "Adding JWT auth" }, "tc1"),
+					toolCallResponse("mark_complete", { summary: "Done" }, "tc2"),
+				],
+				{},
+				{ withMonitor: true },
+			);
 
 			await agent.handleMessage("add auth");
 
@@ -414,7 +444,9 @@ describe("MainAgent State Machine", () => {
 				.map((call: any) => call[0])
 				.filter((message: any) => message.type === "execution_event");
 
-			expect(executionEvents.length).toBeGreaterThanOrEqual(4);
+			// send_to_agent now returns immediately — settled phase is emitted asynchronously
+			// by SessionMonitor, so we only check for planned phases here
+			expect(executionEvents.length).toBeGreaterThanOrEqual(2);
 			expect(executionEvents).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({
@@ -428,13 +460,7 @@ describe("MainAgent State Machine", () => {
 						type: "execution_event",
 						event: expect.objectContaining({
 							toolName: "send_to_agent",
-							phase: "settled",
-							pane: expect.objectContaining({
-								content: expect.stringContaining("> task done"),
-							}),
-							workspace: expect.objectContaining({
-								workingDir: expect.any(String),
-							}),
+							phase: "planned",
 						}),
 					}),
 				]),
@@ -447,7 +473,7 @@ describe("MainAgent State Machine", () => {
 			const agent = setupAgent([
 				toolCallResponse("create_session", {}, "tc0"),
 				// After this tool, stopRequested will be true
-				toolCallResponse("fetch_more", { lines: 100 }, "tc1"),
+				toolCallResponse("inspect_session", { lines: 100 }, "tc1"),
 			]);
 
 			// Patch signalRouter with special isStopRequested behavior
@@ -507,12 +533,12 @@ describe("MainAgent State Machine", () => {
 		it("should return to idle when LLM returns only text in tool loop", async () => {
 			const agent = setupAgent([
 				// First call: tool call to enter EXECUTING
-				toolCallResponse("fetch_more", { lines: 100 }, "tc1"),
+				toolCallResponse("inspect_session", { lines: 100 }, "tc1"),
 				// Second call: only text (no tools) → exit EXECUTING
 				textResponse("All looks good, nothing more to do."),
 			]);
 
-			// Need a pane target for fetch_more
+			// Need a pane target for inspect_session
 			agent.setPaneTarget("test:0.0");
 
 			await agent.handleMessage("check status");
@@ -539,7 +565,7 @@ describe("MainAgent State Machine", () => {
 	describe("error recovery", () => {
 		it("should recover to idle when handleMessage fails during executing", async () => {
 			const agent = setupAgent([
-				toolCallResponse("fetch_more", { lines: 100 }, "tc1"),
+				toolCallResponse("inspect_session", { lines: 100 }, "tc1"),
 			]);
 			agent.setPaneTarget("test:0.0");
 
@@ -554,7 +580,7 @@ describe("MainAgent State Machine", () => {
 
 		it("should recover to idle when handleResume fails", async () => {
 			const agent = setupAgent([
-				toolCallResponse("fetch_more", { lines: 100 }, "tc1"),
+				toolCallResponse("inspect_session", { lines: 100 }, "tc1"),
 			]);
 			agent.setPaneTarget("test:0.0");
 
@@ -772,12 +798,20 @@ describe("MainAgent State Machine", () => {
 
 		it("should support multiple sessions and route send_to_agent by session_id", async () => {
 			// Create two sessions, then send to the first one by session_id
-			const agent = setupAgent([
-				toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
-				toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
-				toolCallResponse("send_to_agent", { prompt: "test", summary: "test", session_id: "cliclaw-backend" }, "tc3"),
-				textResponse("Done."),
-			]);
+			const agent = setupAgent(
+				[
+					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
+					toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
+					toolCallResponse(
+						"send_to_agent",
+						{ prompt: "test", summary: "test", session_id: "cliclaw-backend" },
+						"tc3",
+					),
+					textResponse("Done."),
+				],
+				{},
+				{ withMonitor: true },
+			);
 
 			// Adapter returns different pane targets for each session
 			mockAdapter.launch
@@ -791,11 +825,15 @@ describe("MainAgent State Machine", () => {
 		});
 
 		it("should route to active session when session_id is omitted", async () => {
-			const agent = setupAgent([
-				toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
-				toolCallResponse("send_to_agent", { prompt: "test", summary: "test" }, "tc2"),
-				textResponse("Done."),
-			]);
+			const agent = setupAgent(
+				[
+					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
+					toolCallResponse("send_to_agent", { prompt: "test", summary: "test" }, "tc2"),
+					textResponse("Done."),
+				],
+				{},
+				{ withMonitor: true },
+			);
 
 			mockAdapter.launch.mockResolvedValueOnce("cliclaw-backend:0.0");
 
@@ -805,11 +843,19 @@ describe("MainAgent State Machine", () => {
 		});
 
 		it("should return error for non-existent session_id", async () => {
-			const agent = setupAgent([
-				toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
-				toolCallResponse("send_to_agent", { prompt: "test", summary: "test", session_id: "nonexistent" }, "tc2"),
-				textResponse("Error handled."),
-			]);
+			const agent = setupAgent(
+				[
+					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
+					toolCallResponse(
+						"send_to_agent",
+						{ prompt: "test", summary: "test", session_id: "nonexistent" },
+						"tc2",
+					),
+					textResponse("Error handled."),
+				],
+				{},
+				{ withMonitor: true },
+			);
 
 			await agent.handleMessage("send to wrong session");
 
@@ -818,10 +864,14 @@ describe("MainAgent State Machine", () => {
 		});
 
 		it("should return error when no active session exists", async () => {
-			const agent = setupAgent([
-				toolCallResponse("send_to_agent", { prompt: "test", summary: "test" }, "tc1"),
-				textResponse("No session."),
-			]);
+			const agent = setupAgent(
+				[
+					toolCallResponse("send_to_agent", { prompt: "test", summary: "test" }, "tc1"),
+					textResponse("No session."),
+				],
+				{},
+				{ withMonitor: true },
+			);
 
 			await agent.handleMessage("send without session");
 
@@ -829,14 +879,18 @@ describe("MainAgent State Machine", () => {
 		});
 
 		it("should remove session from registry on exit_agent", async () => {
-			const agent = setupAgent([
-				toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
-				toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
-				toolCallResponse("exit_agent", { summary: "exit frontend", session_id: "cliclaw-frontend" }, "tc3"),
-				// After exit, send to remaining session without session_id
-				toolCallResponse("send_to_agent", { prompt: "continue", summary: "continue" }, "tc4"),
-				textResponse("Done."),
-			]);
+			const agent = setupAgent(
+				[
+					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
+					toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
+					toolCallResponse("exit_agent", { summary: "exit frontend", session_id: "cliclaw-frontend" }, "tc3"),
+					// After exit, send to remaining session without session_id
+					toolCallResponse("send_to_agent", { prompt: "continue", summary: "continue" }, "tc4"),
+					textResponse("Done."),
+				],
+				{},
+				{ withMonitor: true },
+			);
 
 			mockAdapter.launch
 				.mockResolvedValueOnce("cliclaw-backend:0.0")
@@ -852,13 +906,17 @@ describe("MainAgent State Machine", () => {
 		});
 
 		it("should set activeSessionId to null when last session is exited", async () => {
-			const agent = setupAgent([
-				toolCallResponse("create_session", { session_name: "only" }, "tc1"),
-				toolCallResponse("exit_agent", { summary: "exit only" }, "tc2"),
-				// Now try send_to_agent — should fail with no active session
-				toolCallResponse("send_to_agent", { prompt: "test", summary: "test" }, "tc3"),
-				textResponse("Done."),
-			]);
+			const agent = setupAgent(
+				[
+					toolCallResponse("create_session", { session_name: "only" }, "tc1"),
+					toolCallResponse("exit_agent", { summary: "exit only" }, "tc2"),
+					// Now try send_to_agent — should fail with no active session
+					toolCallResponse("send_to_agent", { prompt: "test", summary: "test" }, "tc3"),
+					textResponse("Done."),
+				],
+				{},
+				{ withMonitor: true },
+			);
 
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
 
@@ -869,15 +927,19 @@ describe("MainAgent State Machine", () => {
 		});
 
 		it("should not change activeSessionId when exiting a non-active session", async () => {
-			const agent = setupAgent([
-				toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
-				toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
-				// frontend is now active; exit backend
-				toolCallResponse("exit_agent", { summary: "exit backend", session_id: "cliclaw-backend" }, "tc3"),
-				// send without session_id should still go to frontend (still active)
-				toolCallResponse("send_to_agent", { prompt: "continue", summary: "continue" }, "tc4"),
-				textResponse("Done."),
-			]);
+			const agent = setupAgent(
+				[
+					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
+					toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
+					// frontend is now active; exit backend
+					toolCallResponse("exit_agent", { summary: "exit backend", session_id: "cliclaw-backend" }, "tc3"),
+					// send without session_id should still go to frontend (still active)
+					toolCallResponse("send_to_agent", { prompt: "continue", summary: "continue" }, "tc4"),
+					textResponse("Done."),
+				],
+				{},
+				{ withMonitor: true },
+			);
 
 			mockAdapter.launch
 				.mockResolvedValueOnce("cliclaw-backend:0.0")
@@ -891,15 +953,23 @@ describe("MainAgent State Machine", () => {
 		});
 
 		it("should update activeSessionId when using session_id parameter", async () => {
-			const agent = setupAgent([
-				toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
-				toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
-				// Send to backend explicitly — should switch active
-				toolCallResponse("send_to_agent", { prompt: "backend task", summary: "test", session_id: "cliclaw-backend" }, "tc3"),
-				// Now send without session_id — should go to backend (newly active)
-				toolCallResponse("send_to_agent", { prompt: "follow up", summary: "test" }, "tc4"),
-				textResponse("Done."),
-			]);
+			const agent = setupAgent(
+				[
+					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
+					toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
+					// Send to backend explicitly — should switch active
+					toolCallResponse(
+						"send_to_agent",
+						{ prompt: "backend task", summary: "test", session_id: "cliclaw-backend" },
+						"tc3",
+					),
+					// Now send without session_id — should go to backend (newly active)
+					toolCallResponse("send_to_agent", { prompt: "follow up", summary: "test" }, "tc4"),
+					textResponse("Done."),
+				],
+				{},
+				{ withMonitor: true },
+			);
 
 			mockAdapter.launch
 				.mockResolvedValueOnce("cliclaw-backend:0.0")
@@ -915,7 +985,7 @@ describe("MainAgent State Machine", () => {
 
 		it("should work with setPaneTarget for backward compatibility", async () => {
 			const agent = setupAgent([
-				toolCallResponse("fetch_more", { lines: 100 }, "tc1"),
+				toolCallResponse("inspect_session", { lines: 100 }, "tc1"),
 				textResponse("Got content."),
 			]);
 
@@ -925,6 +995,96 @@ describe("MainAgent State Machine", () => {
 			await agent.handleMessage("fetch more");
 
 			expect(mockBridge.capturePane).toHaveBeenCalledWith("legacy:0.0", { startLine: -100 });
+		});
+	});
+
+	describe("AGENT_CALLBACK prefix detection in drain", () => {
+		it("should not add [HUMAN] prefix to messages starting with [AGENT_CALLBACK", async () => {
+			// We need a scenario where messages are queued during EXECUTING and then drained.
+			// Use a deferred gate on the first LLM call to inject a queued message mid-execution.
+			mockCtx = createMockContextManager();
+			mockRouter = createMockSignalRouter();
+			mockBroadcaster = createMockBroadcaster();
+			mockAdapter = createMockAdapter();
+			mockBridge = createMockBridge();
+			mockDetector = createMockStateDetector();
+
+			const firstStreamGate = createDeferred();
+			let callCount = 0;
+
+			const responses: LLMStreamEvent[][] = [
+				// First call triggers exec_command to enter EXECUTING
+				toolCallResponse("exec_command", { command: "ls", summary: "check" }, "tc1"),
+				// Second call (after drain) returns text
+				textResponse("Callback handled."),
+			];
+
+			const mockLLM = {
+				stream: vi.fn().mockImplementation(() => {
+					const currentCall = callCount++;
+					const events = responses[currentCall] ?? [];
+
+					return (async function* () {
+						if (currentCall === 0) {
+							await firstStreamGate.promise;
+						}
+						for (const event of events) {
+							yield event;
+						}
+					})();
+				}),
+				complete: vi.fn(),
+			};
+
+			const agent = new MainAgent({
+				contextManager: mockCtx,
+				signalRouter: mockRouter,
+				llmClient: mockLLM as any,
+				adapter: mockAdapter,
+				bridge: mockBridge,
+				stateDetector: mockDetector,
+				broadcaster: mockBroadcaster,
+			});
+
+			// Start the first message — it will block on the gate
+			const handlePromise = agent.handleMessage("do something");
+
+			// Wait a tick for the first message to start processing
+			await Promise.resolve();
+			await Promise.resolve();
+
+			// Queue both a callback message and a human message while executing
+			agent.handleMessage("[AGENT_CALLBACK task-1] Agent completed successfully");
+			agent.handleMessage("Hey, how is it going?");
+
+			// Unblock the first LLM call
+			firstStreamGate.resolve();
+
+			await handlePromise;
+
+			// Find addMessage calls to check the prefix behavior
+			const addMessageCalls = mockCtx.addMessage.mock.calls;
+
+			// The callback message should NOT have [HUMAN] prefix
+			const callbackMsg = addMessageCalls.find(
+				(c: any) =>
+					c[0].role === "user" &&
+					typeof c[0].content === "string" &&
+					c[0].content.includes("[AGENT_CALLBACK"),
+			);
+			expect(callbackMsg).toBeTruthy();
+			expect(callbackMsg![0].content).not.toContain("[HUMAN]");
+			expect(callbackMsg![0].content).toContain("[AGENT_CALLBACK task-1]");
+
+			// The human message SHOULD have [HUMAN] prefix
+			const humanMsg = addMessageCalls.find(
+				(c: any) =>
+					c[0].role === "user" &&
+					typeof c[0].content === "string" &&
+					c[0].content.includes("[HUMAN]"),
+			);
+			expect(humanMsg).toBeTruthy();
+			expect(humanMsg![0].content).toContain("[HUMAN] Hey, how is it going?");
 		});
 	});
 });
