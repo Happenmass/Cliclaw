@@ -28,6 +28,8 @@ import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
 import { logger } from "../utils/logger.js";
 import type { ContextManager } from "./context-manager.js";
+import type { SettledEvent } from "./session-monitor.js";
+import { SessionMonitor } from "./session-monitor.js";
 import type { Signal, SignalRouter } from "./signal-router.js";
 
 // ─── Types ──────────────────────────────────────────────
@@ -52,7 +54,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "send_to_agent",
 		description:
-			"Send an instruction prompt to the coding agent and wait for the agent to finish. Returns the agent's final status and pane content. This tool blocks until the agent completes, encounters an error, or times out. If session_id is omitted, routes to the most recently used session.",
+			"Send an instruction prompt to the coding agent. Returns immediately with a task_id. The agent executes asynchronously — you will receive a callback message when the agent finishes, encounters an error, or needs input. If the target session is busy, returns the current task info and recent agent logs instead. If session_id is omitted, routes to the most recently used session.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -73,7 +75,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "respond_to_agent",
 		description:
-			"Respond to an agent waiting for input and wait for the agent to finish. Formats: 'Enter', 'Escape', 'y', 'n', 'arrow:down:N', 'keys:K1,K2,...', or plain text. Returns the agent's final status and pane content after it settles. If session_id is omitted, routes to the most recently used session.",
+			"Respond to an agent waiting for input. Only callable when the session has an active task in waiting_input status. Returns immediately — you will receive a callback when the agent settles again. Formats: 'Enter', 'Escape', 'y', 'n', 'arrow:down:N', 'keys:K1,K2,...', or plain text. If session_id is omitted, routes to the most recently used session.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -92,13 +94,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 		},
 	},
 	{
-		name: "fetch_more",
+		name: "inspect_session",
 		description:
-			"Fetch more lines from the tmux pane to see additional output history. Only use this AFTER the agent has finished working (i.e., after send_to_agent or respond_to_agent has returned), when the returned content is clearly truncated or missing earlier context. Do NOT use this to poll for agent progress. If session_id is omitted, routes to the most recently used session.",
+			"Inspect a session's current pane content and task status. Can be used at any time — during agent execution, while waiting, or after completion. Useful for checking progress, understanding what an agent is doing, or getting more context beyond what a callback provided. If session_id is omitted, routes to the most recently used session.",
 		parameters: {
 			type: "object",
 			properties: {
-				lines: { type: "number", description: "Number of lines to capture (e.g. 200, 300, 500)" },
+				lines: { type: "number", description: "Number of lines to capture (e.g. 100, 200, 500)" },
 				session_id: {
 					type: "string",
 					description: "Target session name. If omitted, routes to the active session.",
@@ -203,7 +205,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "create_session",
 		description:
-			'Create a tmux session with the "cliclaw-" prefix and launch the coding agent in it. Must be called before send_to_agent/respond_to_agent/fetch_more. On naming conflict, returns an error so you can retry with a different name.',
+			'Create a tmux session with the "cliclaw-" prefix and launch the coding agent in it. Must be called before send_to_agent/respond_to_agent/inspect_session. On naming conflict, returns an error so you can retry with a different name.',
 		parameters: {
 			type: "object",
 			properties: {
@@ -262,8 +264,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 				},
 				summary: {
 					type: "string",
-					description:
-						"A brief human-readable summary for the chat interface (e.g., 'Cleaning up idle session')",
+					description: "A brief human-readable summary for the chat interface (e.g., 'Cleaning up idle session')",
 				},
 			},
 			required: ["session_id", "summary"],
@@ -321,6 +322,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private debug: boolean;
 	private firstLLMCall = true;
 	private execCommandBroadcastCount = 0;
+	private sessionMonitor: SessionMonitor | null = null;
 	private searchConfig: HybridSearchConfig = {
 		enabled: true,
 		vectorWeight: 0.7,
@@ -372,6 +374,24 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	/** Replace the skill registry at runtime (used by /reset). */
 	setSkillRegistry(registry: SkillRegistry): void {
 		this.skillRegistry = registry;
+	}
+
+	setupSessionMonitor(): void {
+		this.sessionMonitor = new SessionMonitor({
+			stateDetector: this.stateDetector,
+			bridge: this.bridge,
+			signalRouter: this.signalRouter,
+			onCallback: (message: string) => {
+				this.handleMessage(message);
+			},
+			onSettled: (event: SettledEvent) => {
+				this.emitExecutionEvent({ ...event, phase: "settled" });
+			},
+		});
+	}
+
+	shutdownMonitor(): void {
+		this.sessionMonitor?.shutdown();
 	}
 
 	setPaneTarget(paneTarget: string, sessionId = "_default"): void {
@@ -470,8 +490,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			logger.info("main-agent:prompt", "═══ First LLM Call — Full Prompt ═══");
 			logger.info("main-agent:prompt", `[System Prompt]\n${system}`);
 			for (const msg of messages) {
-				const contentStr =
-					typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content, null, 2);
+				const contentStr = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content, null, 2);
 				logger.info(
 					"main-agent:prompt",
 					`[Message role=${msg.role}${msg.toolCallId ? ` toolCallId=${msg.toolCallId}` : ""}]\n${contentStr}`,
@@ -604,9 +623,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			if (!this.messageQueue.isEmpty()) {
 				const queued = this.messageQueue.drain();
 				for (const msg of queued) {
+					const isCallback = msg.startsWith("[AGENT_CALLBACK");
 					this.contextManager.addMessage({
 						role: "user",
-						content: `[HUMAN] ${msg}`,
+						content: isCallback ? msg : `[HUMAN] ${msg}`,
 					});
 				}
 			}
@@ -777,7 +797,12 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		return `${toolName}-${randomUUID()}`;
 	}
 
-	private buildPaneSnippet(content: string, ansiContent?: string, maxLines = 40, maxChars = 4000): ExecutionPaneSnippet {
+	private buildPaneSnippet(
+		content: string,
+		ansiContent?: string,
+		maxLines = 40,
+		maxChars = 4000,
+	): ExecutionPaneSnippet {
 		const plainLines = content.split("\n");
 		const paneContent = plainLines.slice(-maxLines).join("\n").slice(-maxChars);
 		const snippet: ExecutionPaneSnippet = {
@@ -929,7 +954,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		if (test.status === "passed" || test.status === "failed") {
 			return {
 				status: "verified",
-				summary: test.status === "passed" ? "Verification command completed successfully" : "Verification command reported failures",
+				summary:
+					test.status === "passed"
+						? "Verification command completed successfully"
+						: "Verification command reported failures",
 			};
 		}
 
@@ -1023,9 +1051,25 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 				const prompt = args.prompt as string;
 				const summary = args.summary as string;
-				const runId = this.createExecutionRunId(name);
 
-				// Broadcast agent update with summary
+				// Non-blocking: check if session is busy
+				if (this.sessionMonitor?.isBusy(sendSessionId)) {
+					const task = this.sessionMonitor.getTask(sendSessionId)!;
+					const elapsed = Math.round((Date.now() - task.startedAt) / 1000);
+					let paneContent = "";
+					try {
+						const capture = await this.bridge.capturePane(sendSession.paneTarget, { startLine: -100 });
+						paneContent = capture.content;
+					} catch {
+						paneContent = "(failed to capture pane content)";
+					}
+					return {
+						output: `Session ${sendSessionId} is busy (task_id: ${task.taskId}, running for ${elapsed}s).\nCurrent task: ${task.summary}\nCurrent agent logs:\n${paneContent}`,
+						terminal: false,
+					};
+				}
+
+				const runId = this.createExecutionRunId(name);
 				this.emitUiEvent("agent_update", summary);
 				this.emitExecutionEvent({
 					runId,
@@ -1041,30 +1085,27 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 				const sendPreHash = await this.stateDetector.captureHash(sendSession.paneTarget);
 				await this.adapter.sendPrompt(this.bridge, sendSession.paneTarget, prompt);
-				this.signalRouter.notifyPromptSent(prompt);
-				const sendResult = await this.stateDetector.waitForSettled(sendSession.paneTarget, "", {
-					preHash: sendPreHash,
-					isAborted: () => this.signalRouter.isStopRequested(),
-				});
-				const sendStatus = sendResult.timedOut ? "timeout" : sendResult.analysis.status;
-				const ansiContent = await this.captureAnsiPaneContent(sendSession.paneTarget);
-				const pane = this.buildPaneSnippet(sendResult.content, ansiContent);
-				const workspace = await this.collectWorkspaceEvidence(sendSession.workingDir);
-				const test = this.extractTestEvidence(sendResult.content);
-				this.emitExecutionEvent({
-					runId,
-					phase: "settled",
-					toolName: name,
-					summary,
-					pane,
-					workspace,
-					test,
-					verification: this.buildVerificationEvidence(test),
-				});
-				return {
-					output: `[Agent ${sendStatus}] (${sendResult.analysis.detail})\n${sendResult.content}`,
-					terminal: false,
-				};
+
+				if (this.sessionMonitor) {
+					const result = this.sessionMonitor.dispatch(sendSessionId, sendSession.paneTarget, {
+						preHash: sendPreHash,
+						summary,
+						taskContext: prompt,
+					});
+
+					if (result.dispatched) {
+						return {
+							output: `Task dispatched. task_id: ${result.task.taskId}, session: ${sendSessionId}.\nYou will receive a callback when the agent finishes.`,
+							terminal: false,
+						};
+					}
+					return {
+						output: `Session ${sendSessionId} became busy unexpectedly.`,
+						terminal: false,
+					};
+				}
+
+				return { output: "Error: SessionMonitor not initialized", terminal: false };
 			}
 
 			case "respond_to_agent": {
@@ -1077,9 +1118,25 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 				const value = args.value as string;
 				const summary = args.summary as string;
-				const runId = this.createExecutionRunId(name);
 
-				// Broadcast agent update with summary
+				// Check task state
+				if (this.sessionMonitor) {
+					const task = this.sessionMonitor.getTask(respondSessionId);
+					if (!task) {
+						return {
+							output: `Error: Session ${respondSessionId} has no active task.`,
+							terminal: false,
+						};
+					}
+					if (task.status !== "waiting_input") {
+						return {
+							output: `Error: Agent in session ${respondSessionId} is not waiting for input (current status: ${task.status}).`,
+							terminal: false,
+						};
+					}
+				}
+
+				const runId = this.createExecutionRunId(name);
 				this.emitUiEvent("agent_update", summary);
 				this.emitExecutionEvent({
 					runId,
@@ -1093,41 +1150,57 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					},
 				});
 
-				const respondPreHash = await this.stateDetector.captureHash(respondSession.paneTarget);
 				await this.adapter.sendResponse(this.bridge, respondSession.paneTarget, value);
-				const respondResult = await this.stateDetector.waitForSettled(respondSession.paneTarget, "", {
-					preHash: respondPreHash,
-					isAborted: () => this.signalRouter.isStopRequested(),
-				});
-				const respondStatus = respondResult.timedOut ? "timeout" : respondResult.analysis.status;
-				const ansiContent = await this.captureAnsiPaneContent(respondSession.paneTarget);
-				const pane = this.buildPaneSnippet(respondResult.content, ansiContent);
-				const workspace = await this.collectWorkspaceEvidence(respondSession.workingDir);
-				const test = this.extractTestEvidence(respondResult.content);
-				this.emitExecutionEvent({
-					runId,
-					phase: "settled",
-					toolName: name,
-					summary,
-					pane,
-					workspace,
-					test,
-					verification: this.buildVerificationEvidence(test),
-				});
-				return {
-					output: `[Agent ${respondStatus}] (${respondResult.analysis.detail})\n${respondResult.content}`,
-					terminal: false,
-				};
+
+				if (this.sessionMonitor) {
+					const newPreHash = await this.stateDetector.captureHash(respondSession.paneTarget);
+					const resumed = this.sessionMonitor.resumeTask(respondSessionId, newPreHash);
+					if (!resumed) {
+						return {
+							output: `Error: Failed to resume task monitoring for session ${respondSessionId}.`,
+							terminal: false,
+						};
+					}
+					return {
+						output: "Response sent, agent continuing execution.",
+						terminal: false,
+					};
+				}
+
+				return { output: "Error: SessionMonitor not initialized", terminal: false };
 			}
 
-			case "fetch_more": {
+			case "inspect_session": {
 				const resolved = this.resolveSession(args.session_id as string | undefined);
 				if ("error" in resolved) {
 					return { output: `Error: ${resolved.error}`, terminal: false };
 				}
+				const { id: inspectSessionId } = resolved;
 				const lines = args.lines as number;
-				const capture = await this.bridge.capturePane(resolved.entry.paneTarget, { startLine: -lines });
-				return { output: capture.content, terminal: false };
+
+				let paneContent: string;
+				try {
+					const capture = await this.bridge.capturePane(resolved.entry.paneTarget, { startLine: -lines });
+					paneContent = capture.content;
+				} catch (err: any) {
+					return {
+						output: `Error: Failed to capture pane for session ${inspectSessionId}: ${err.message}`,
+						terminal: false,
+					};
+				}
+
+				let statusLabel = "idle";
+				if (this.sessionMonitor) {
+					const task = this.sessionMonitor.getTask(inspectSessionId);
+					if (task) {
+						statusLabel = task.status;
+					}
+				}
+
+				return {
+					output: `[Session ${inspectSessionId}] Status: ${statusLabel}\n${paneContent}`,
+					terminal: false,
+				};
 			}
 
 			case "mark_complete": {
@@ -1328,10 +1401,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						workspace,
 						persistence: this.createPersistenceEvidence(),
 					});
-					logger.info(
-						"main-agent",
-						`Session created: ${sessionName}, pane: ${paneTarget}, cwd: ${workingDir}`,
-					);
+					logger.info("main-agent", `Session created: ${sessionName}, pane: ${paneTarget}, cwd: ${workingDir}`);
 					return {
 						output: `Session "${sessionName}" created in ${workingDir}. Session ID: "${sessionName}". Agent launched in ${paneTarget}. You can now use send_to_agent.`,
 						terminal: false,
@@ -1410,6 +1480,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				});
 
 				// Remove session from registry and update activeSessionId
+				this.sessionMonitor?.cleanup(exitSessionId);
 				this.sessions.delete(exitSessionId);
 				if (this.activeSessionId === exitSessionId) {
 					const remaining = [...this.sessions.keys()];
@@ -1434,6 +1505,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						const sessions = await this.bridge.listCliclawSessions();
 						if (sessions.length === 0) {
 							return { output: "No cliclaw sessions to kill.", terminal: false };
+						}
+						for (const [id] of this.sessions) {
+							this.sessionMonitor?.cleanup(id);
 						}
 						const killed: string[] = [];
 						for (const s of sessions) {
@@ -1462,6 +1536,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						};
 					}
 					await this.bridge.killSession(targetName);
+					this.sessionMonitor?.cleanup(targetName);
 					this.sessions.delete(targetName);
 					if (this.activeSessionId === targetName) {
 						const remaining = [...this.sessions.keys()];

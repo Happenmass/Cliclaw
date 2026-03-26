@@ -57,7 +57,7 @@ The agent has richer internal context (open files, edit history, project underst
 
 1. **Reconnoiter** — Use `exec_command` to locate and confirm the project root directory.
 2. **Command** — Send precise instructions to the agent. The agent will explore the codebase itself.
-3. **Observe** — Read the agent's output (via `fetch_more`) to confirm the task was completed correctly
+3. **Observe** — Read the agent's output (via `inspect_session`) to confirm the task was completed correctly
 4. **Iterate** — If results are wrong, adjust instructions and retry
 
 When you need verification (tests, builds), instruct the agent to run them, then review the output — do not run them yourself.
@@ -176,7 +176,7 @@ For these cases, use the standard Reconnoiter → Command → Observe → Iterat
 
 You can manage multiple concurrent tmux sessions. Each session has a unique session name (returned as `Session ID` by `create_session`).
 
-- **`session_id` parameter**: `send_to_agent`, `respond_to_agent`, `fetch_more`, and `exit_agent` accept an optional `session_id` parameter. When provided, the tool routes to that specific session. When omitted, it routes to the most recently used session.
+- **`session_id` parameter**: `send_to_agent`, `respond_to_agent`, `inspect_session`, and `exit_agent` accept an optional `session_id` parameter. When provided, the tool routes to that specific session. When omitted, it routes to the most recently used session.
 - **Always remember session names**: After `create_session`, note the Session ID in the response. When working with multiple sessions, always pass the correct `session_id` to target the right agent.
 - **When unsure which sessions exist**: Call `list_cliclaw_sessions` to see all active sessions before sending commands.
 

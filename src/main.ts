@@ -68,7 +68,11 @@ function createMemorySyncRunner(params: {
 				},
 				embeddingProvider: params.embeddingProvider,
 				cache: params.embeddingProvider
-					? { provider: params.embeddingProvider.id, model: params.embeddingProvider.model, providerKey: "default" }
+					? {
+							provider: params.embeddingProvider.id,
+							model: params.embeddingProvider.model,
+							providerKey: "default",
+						}
 					: undefined,
 			});
 
@@ -222,7 +226,19 @@ async function getActiveServerState(): Promise<ServerRuntimeState | null> {
 }
 
 function buildDaemonChildArgs(args: ReturnType<typeof parseCliArgs>): string[] {
-	const childArgs = ["--max-old-space-size=8192", process.argv[1], "serve", "--agent", args.agent, "--host", args.host, "--port", String(args.port), "--cwd", args.cwd];
+	const childArgs = [
+		"--max-old-space-size=8192",
+		process.argv[1],
+		"serve",
+		"--agent",
+		args.agent,
+		"--host",
+		args.host,
+		"--port",
+		String(args.port),
+		"--cwd",
+		args.cwd,
+	];
 
 	if (args.provider) {
 		childArgs.push("--provider", args.provider);
@@ -720,6 +736,8 @@ async function main(): Promise<void> {
 		},
 	});
 
+	mainAgent.setupSessionMonitor();
+
 	// Log state changes
 	mainAgent.on("state_change", (state) => {
 		logger.info("main", `Agent state: ${state}`);
@@ -789,7 +807,10 @@ async function main(): Promise<void> {
 		// 4. Create new SkillRegistry and update MainAgent
 		const resetSkillRegistry = new SkillRegistry(resetFiltered);
 		mainAgent.setSkillRegistry(resetSkillRegistry);
-		logger.info("main", `Skills reloaded: ${resetSkillRegistry.size} (${resetFiltered.map((s) => s.name).join(", ")})`);
+		logger.info(
+			"main",
+			`Skills reloaded: ${resetSkillRegistry.size} (${resetFiltered.map((s) => s.name).join(", ")})`,
+		);
 
 		// 5. Clear old skill commands and re-register
 		commandRegistry.clearSkillCommands();
@@ -858,6 +879,8 @@ async function main(): Promise<void> {
 
 	const shutdown = async () => {
 		console.log(chalk.yellow("\nShutting down..."));
+
+		mainAgent.shutdownMonitor();
 
 		// Stop MainAgent if executing
 		if (mainAgent.state === "executing") {
