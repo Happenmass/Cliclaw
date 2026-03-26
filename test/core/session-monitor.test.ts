@@ -397,6 +397,26 @@ describe("SessionMonitor", () => {
 		});
 	});
 
+	describe("pane content in callback message", () => {
+		it("should include captured pane content in callback", async () => {
+			monitor.dispatch("session-1", "session-1:0.0", {
+				preHash: "abc123",
+				summary: "Check pane content",
+			});
+
+			mockDetector._resolve(settledResult("completed", "Done"));
+
+			await vi.waitFor(() => {
+				expect(onCallback).toHaveBeenCalledTimes(1);
+			});
+
+			const msg = onCallback.mock.calls[0][0] as string;
+			// Should include pane content from bridge.capturePane mock
+			expect(msg).toContain("pane content");
+			expect(mockBridge.capturePane).toHaveBeenCalled();
+		});
+	});
+
 	describe("duration in callback message", () => {
 		it("should include duration in seconds", async () => {
 			monitor.dispatch("session-1", "session-1:0.0", {
@@ -521,14 +541,14 @@ describe("SessionMonitor", () => {
 	});
 
 	describe("pane snippet in settled event", () => {
-		it("should include last 40 lines capped at 4000 chars", async () => {
+		it("should include last 100 lines capped at 10000 chars", async () => {
 			monitor.dispatch("session-1", "session-1:0.0", {
 				preHash: "abc123",
 				summary: "Pane test",
 			});
 
 			// Create content with many lines
-			const lines = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`);
+			const lines = Array.from({ length: 150 }, (_, i) => `line ${i + 1}`);
 			const content = lines.join("\n");
 
 			mockDetector._resolve({
@@ -543,10 +563,10 @@ describe("SessionMonitor", () => {
 
 			const event = onSettled.mock.calls[0][0] as SettledEvent;
 			expect(event.pane).toBeDefined();
-			// Should only have last 40 lines
-			expect(event.pane!.lines).toBe(40);
-			expect(event.pane!.content).toContain("line 21");
-			expect(event.pane!.content).toContain("line 60");
+			// Should only have last 100 lines
+			expect(event.pane!.lines).toBe(100);
+			expect(event.pane!.content).toContain("line 51");
+			expect(event.pane!.content).toContain("line 150");
 			expect(event.pane!.content).not.toContain("line 1\n");
 		});
 	});

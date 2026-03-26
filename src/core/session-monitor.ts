@@ -176,16 +176,17 @@ export class SessionMonitor {
 
 				const status = result.analysis.status;
 				const duration = Math.round((Date.now() - task.startedAt) / 1000);
+				const paneContent = await this.capturePaneContent(paneTarget);
 
 				if (status === "waiting_input") {
 					task.status = "waiting_input";
-					this.fireCallback(task, "waiting_input", result.analysis.detail, duration);
+					this.fireCallback(task, "waiting_input", result.analysis.detail, duration, paneContent);
 					// Do NOT delete from Map — wait for resumeTask
 					return;
 				}
 
 				if (result.timedOut) {
-					this.fireCallback(task, "timeout", result.analysis.detail, duration);
+					this.fireCallback(task, "timeout", result.analysis.detail, duration, paneContent);
 					this.fireSettledEvent(task, result.content);
 					this.tasks.delete(sessionId);
 					this.paneTargets.delete(sessionId);
@@ -193,13 +194,14 @@ export class SessionMonitor {
 				}
 
 				// Terminal states: completed, error, or anything else
-				this.fireCallback(task, status, result.analysis.detail, duration);
+				this.fireCallback(task, status, result.analysis.detail, duration, paneContent);
 				this.fireSettledEvent(task, result.content);
 				this.tasks.delete(sessionId);
 				this.paneTargets.delete(sessionId);
 			} catch (err: any) {
 				const duration = Math.round((Date.now() - task.startedAt) / 1000);
-				this.fireCallback(task, "error", `Exception: ${err.message}`, duration);
+				const paneContent = await this.capturePaneContent(paneTarget);
+				this.fireCallback(task, "error", `Exception: ${err.message}`, duration, paneContent);
 				this.tasks.delete(sessionId);
 				this.paneTargets.delete(sessionId);
 			}
@@ -211,25 +213,44 @@ export class SessionMonitor {
 		});
 	}
 
-	private fireCallback(task: TaskInfo, status: string, detail: string, durationSeconds: number): void {
-		const message = [
+	private fireCallback(
+		task: TaskInfo,
+		status: string,
+		detail: string,
+		durationSeconds: number,
+		paneContent?: string,
+	): void {
+		const lines = [
 			`[AGENT_CALLBACK session_id=${task.sessionId} task_id=${task.taskId} status=${status} duration=${durationSeconds}s]`,
 			`Original task: ${task.summary}`,
 			`Agent task settled with status: ${status} (${detail})`,
-		].join("\n");
+		];
+		if (paneContent) {
+			lines.push("");
+			lines.push(paneContent);
+		}
 
 		logger.info("session-monitor", `Task ${task.taskId} settled: ${status} (${durationSeconds}s)`);
-		this.onCallback(message);
+		this.onCallback(lines.join("\n"));
+	}
+
+	private async capturePaneContent(paneTarget: string, lines = 100): Promise<string> {
+		try {
+			const capture = await this.bridge.capturePane(paneTarget, { startLine: -lines });
+			return capture.content;
+		} catch {
+			return "(failed to capture pane content)";
+		}
 	}
 
 	private fireSettledEvent(task: TaskInfo, content: string): void {
 		if (!this.onSettled) return;
 
-		const lines = content.split("\n");
-		const lastLines = lines.slice(-40);
+		const contentLines = content.split("\n");
+		const lastLines = contentLines.slice(-100);
 		let snippet = lastLines.join("\n");
-		if (snippet.length > 4000) {
-			snippet = snippet.slice(-4000);
+		if (snippet.length > 10000) {
+			snippet = snippet.slice(-10000);
 		}
 
 		const pane: ExecutionPaneSnippet = {
