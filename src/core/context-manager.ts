@@ -59,7 +59,7 @@ export class ContextManager {
 	constructor(config: ContextManagerConfig) {
 		this.llmClient = config.llmClient;
 		this.promptLoader = config.promptLoader;
-		this.contextWindowLimit = config.contextWindowLimit ?? 128000;
+		this.contextWindowLimit = config.contextWindowLimit ?? 500000;
 		this.compressionThreshold = config.compressionThreshold ?? 0.7;
 		this.flushThreshold = config.flushThreshold ?? 0.6;
 		this.toolResultRetention = config.toolResultRetention ?? 20;

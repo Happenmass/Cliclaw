@@ -251,6 +251,9 @@ function buildDaemonChildArgs(args: ReturnType<typeof parseCliArgs>): string[] {
 	if (args.baseUrl) {
 		childArgs.push("--base-url", args.baseUrl);
 	}
+	if (args.contextWindow) {
+		childArgs.push("--context-window", String(args.contextWindow));
+	}
 
 	return childArgs;
 }
@@ -663,6 +666,8 @@ async function main(): Promise<void> {
 		promptLoader,
 		memoryStore,
 		syncMemory,
+		contextWindowLimit: args.contextWindow || config.context.contextWindowLimit,
+		compressionThreshold: config.context.compressionThreshold,
 		flushThreshold: config.memory.flushThreshold,
 		toolResultRetention: config.memory.toolResultRetention,
 		conversationStore,

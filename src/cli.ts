@@ -7,6 +7,7 @@ export interface CLIArgs {
 	provider: string | undefined;
 	model: string | undefined;
 	baseUrl: string | undefined;
+	contextWindow: number | undefined;
 	host: string;
 	port: number;
 	listProviders: boolean;
@@ -26,6 +27,7 @@ export function parseCliArgs(): CLIArgs {
 			provider: { type: "string", short: "p" },
 			model: { type: "string", short: "m" },
 			"base-url": { type: "string" },
+			"context-window": { type: "string" },
 			host: { type: "string", default: "127.0.0.1" },
 			port: { type: "string", default: "3120" },
 			"list-providers": { type: "boolean", default: false },
@@ -49,6 +51,7 @@ export function parseCliArgs(): CLIArgs {
 		provider: values.provider as string | undefined,
 		model: values.model as string | undefined,
 		baseUrl: values["base-url"] as string | undefined,
+		contextWindow: values["context-window"] ? Number.parseInt(values["context-window"] as string, 10) : undefined,
 		host: values.host as string,
 		port: Number.parseInt(values.port as string, 10) || 3120,
 		listProviders: values["list-providers"] as boolean,
@@ -90,6 +93,8 @@ Options:
                                     deepseek, groq, together, xai, gemini, mistral, ollama
   -m, --model <id>        LLM model ID (default: provider's default)
   --base-url <url>        Custom API base URL (for self-hosted or custom endpoints)
+  --context-window <n>    Context window size in tokens (default: 500000)
+                          Match this to the model's actual context limit
   --host <host>           Bind address for the HTTP/WebSocket server (default: 127.0.0.1)
   --port <number>         Server port (default: 3120)
   --list-providers        List all available LLM providers

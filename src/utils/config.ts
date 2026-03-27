@@ -56,11 +56,19 @@ export interface SkillsConfig {
 	disabled: string[];
 }
 
+export interface ContextConfig {
+	/** Context window size in tokens. Should match the model's actual context limit. Default 500000. */
+	contextWindowLimit: number;
+	/** Compression threshold ratio (0-1). Conversation is compressed when usage exceeds this ratio. Default 0.7. */
+	compressionThreshold: number;
+}
+
 export interface CliclawConfig {
 	defaultAgent: string;
 	debug: boolean;
 	llm: LLMConfig;
 	providers?: ProviderKeyConfig;
+	context: ContextConfig;
 	stateDetector: StateDetectorConfig;
 	tmux: TmuxConfig;
 	memory: MemoryConfig;
@@ -86,6 +94,10 @@ const DEFAULT_CONFIG: CliclawConfig = {
 	llm: {
 		provider: "anthropic",
 		model: "claude-sonnet-4-6",
+	},
+	context: {
+		contextWindowLimit: 500000,
+		compressionThreshold: 0.7,
 	},
 	stateDetector: {
 		pollIntervalMs: 2000,
@@ -141,6 +153,7 @@ export async function loadConfig(): Promise<CliclawConfig> {
 			...DEFAULT_CONFIG,
 			...userConfig,
 			llm: { ...DEFAULT_CONFIG.llm, ...userConfig.llm },
+			context: { ...DEFAULT_CONFIG.context, ...userConfig.context },
 			stateDetector: { ...DEFAULT_CONFIG.stateDetector, ...userConfig.stateDetector },
 			tmux: { ...DEFAULT_CONFIG.tmux, ...userConfig.tmux },
 			memory: { ...DEFAULT_CONFIG.memory, ...userConfig.memory },

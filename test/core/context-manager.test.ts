@@ -91,9 +91,9 @@ describe("ContextManager", () => {
 		});
 
 		it("should return true when over threshold", () => {
-			// With default 128000 limit and 0.7 threshold = 89600 tokens
-			// Each char ~0.25 tokens, so need ~358400 chars
-			const longContent = "x".repeat(360000);
+			// With default 500000 limit and 0.7 threshold = 350000 tokens
+			// Each char ~0.25 tokens, so need ~1400000 chars
+			const longContent = "x".repeat(1_400_001);
 			contextManager.addMessage({ role: "user", content: longContent });
 			expect(contextManager.shouldCompress()).toBe(true);
 		});
