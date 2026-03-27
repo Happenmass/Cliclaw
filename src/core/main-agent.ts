@@ -76,7 +76,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "respond_to_agent",
 		description:
-			"Respond to an agent waiting for input. Only callable when the session has an active task in waiting_input status. Returns immediately — you will receive a callback when the agent settles again. Formats: 'Enter', 'Escape', 'y', 'n', 'arrow:down:N', 'keys:K1,K2,...', or plain text. If session_id is omitted, routes to the most recently used session.",
+			"Respond to an agent waiting for input. Only callable when the session has an active task in waiting_input status. Returns immediately — you will receive a callback when the agent settles again. Formats: 'Enter', 'Escape', 'y', 'n', 'arrow:down:N', 'keys:K1,K2,...', or plain text (including menu option numbers like '2'). If session_id is omitted, routes to the most recently used session.",
 		parameters: {
 			type: "object",
 			properties: {

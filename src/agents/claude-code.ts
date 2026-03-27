@@ -91,10 +91,13 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 			return;
 		}
 
-		// Priority 5: Detect (y/n) context — send 'y' + Enter
+		// Priority 5: Detect (y/n) context — auto-confirm with 'y' + Enter
+		// Only triggers for genuine y/n prompts, NOT numbered menus.
+		// Guard: skip when pane shows a numbered menu (lines like "1. ..." / "2. ...").
 		const capture = await bridge.capturePane(paneTarget, { startLine: -5 });
 		const lastLines = capture.content;
-		if (/\(y\/n\)/i.test(lastLines) || /Allow/i.test(lastLines) || /approve/i.test(lastLines)) {
+		const hasNumberedMenu = /^\s*[❯›>»]?\s*\d+[.)]\s/m.test(lastLines);
+		if (!hasNumberedMenu && (/\(y\/n\)/i.test(lastLines) || /Allow/i.test(lastLines) || /approve/i.test(lastLines))) {
 			await bridge.sendKeys(paneTarget, "y", { literal: true });
 			await sleep(200);
 			await bridge.sendEnter(paneTarget);
